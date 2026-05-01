@@ -10,7 +10,7 @@ import json
 import threading
 from pathlib import Path
 
-SIGNALS = ("fall", "sitting", "counterflow", "running", "stuff")
+SIGNALS = ("fall", "sitting", "counterflow", "facing_back", "running", "stuff")
 _STATE_PATH = Path(__file__).resolve().parent.parent / "learner_state.json"
 _LOCK = threading.Lock()
 _BUMP = 0.06

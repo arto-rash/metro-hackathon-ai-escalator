@@ -1,16 +1,19 @@
-"""Video analyzer: YOLOv8 person + bag detection, IoU tracking, risk scoring.
+"""Video analyzer: head detection + head orientation, no body pose.
 
-Single small model (yolov8n.pt) shared for two passes:
-- persons (class 0): the head bbox is approximated as the top portion of the
-  person bbox (per the standard `head ≈ top 30%` heuristic), since YOLOv8n
-  is not trained on a 'head' class.
-- bags (24 backpack, 26 handbag, 28 suitcase): used for "stuff on escalator".
+- yolov8n.pt detects persons (class 0). Head bbox = top 30% of person bbox,
+  narrowed to 65% of the person width — same heuristic as the snippet you
+  shared earlier.
+- OpenCV haar cascades (frontal + profile, bundled with opencv-python) run
+  on each head crop and produce a `facing_camera` flag (True / False / None).
+  The risk engine uses lane-majority comparison on this flag rather than any
+  body-keypoint signals.
+- yolov8n.pt also detects bag classes (24/26/28) for "stuff on escalator".
 """
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 import cv2
 import numpy as np
@@ -21,9 +24,12 @@ from .tracker import Detection, IoUTracker, ObjectTracker
 
 _MODEL = None
 _MODEL_LOCK = asyncio.Lock()
+_FRONT_CASCADE: Optional[cv2.CascadeClassifier] = None
+_PROFILE_CASCADE: Optional[cv2.CascadeClassifier] = None
 
-_HEAD_FRACTION = 0.30  # head ≈ top 30% of person bbox
-_HEAD_NARROW = 0.65    # narrow head bbox to 65% of person width
+_HEAD_FRACTION = 0.30
+_HEAD_NARROW = 0.65
+_MIN_HEAD_PX = 24
 
 _STUFF_CLASSES = {24: "backpack", 26: "handbag", 28: "suitcase"}
 
@@ -39,6 +45,15 @@ async def _get_model():
     return _MODEL
 
 
+def _get_cascades() -> tuple[cv2.CascadeClassifier, cv2.CascadeClassifier]:
+    global _FRONT_CASCADE, _PROFILE_CASCADE
+    if _FRONT_CASCADE is None:
+        _FRONT_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    if _PROFILE_CASCADE is None:
+        _PROFILE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
+    return _FRONT_CASCADE, _PROFILE_CASCADE
+
+
 def _head_bbox_from_person(bbox: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
     x1, y1, x2, y2 = bbox
     h = y2 - y1
@@ -46,6 +61,34 @@ def _head_bbox_from_person(bbox: tuple[float, float, float, float]) -> tuple[flo
     cx = (x1 + x2) / 2.0
     half = w * _HEAD_NARROW / 2.0
     return (cx - half, y1, cx + half, y1 + h * _HEAD_FRACTION)
+
+
+def _classify_facing(frame: np.ndarray, head_bbox: tuple[float, float, float, float]) -> Optional[bool]:
+    """Returns True if a face is detected in the head crop, False if neither
+    frontal nor profile fires (assumed back-of-head), None if the crop is too
+    small to be reliable."""
+    H, W = frame.shape[:2]
+    x1 = max(0, int(head_bbox[0]))
+    y1 = max(0, int(head_bbox[1]))
+    x2 = min(W, int(head_bbox[2]))
+    y2 = min(H, int(head_bbox[3]))
+    if x2 - x1 < _MIN_HEAD_PX or y2 - y1 < _MIN_HEAD_PX:
+        return None
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0:
+        return None
+
+    front, profile = _get_cascades()
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    gray = cv2.equalizeHist(gray)
+    if len(front.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=3, minSize=(20, 20))) > 0:
+        return True
+    if len(profile.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=3, minSize=(20, 20))) > 0:
+        return True
+    flipped = cv2.flip(gray, 1)
+    if len(profile.detectMultiScale(flipped, scaleFactor=1.15, minNeighbors=3, minSize=(20, 20))) > 0:
+        return True
+    return False
 
 
 def _person_inside(person_bbox: tuple[float, float, float, float], obj_bbox: tuple[float, float, float, float]) -> bool:
@@ -176,7 +219,9 @@ class VideoAnalyzer:
         if person_result.boxes is not None and len(person_result.boxes) > 0:
             for row in person_result.boxes.xyxy.cpu().numpy():
                 bbox = tuple(float(v) for v in row)
-                detections.append(Detection(bbox=bbox, head_bbox=_head_bbox_from_person(bbox)))
+                head = _head_bbox_from_person(bbox)
+                facing = _classify_facing(frame, head)
+                detections.append(Detection(bbox=bbox, head_bbox=head, facing_camera=facing))
 
         obj_result = model.predict(frame, classes=list(_STUFF_CLASSES.keys()), conf=0.4, verbose=False)[0]
         objects: list[tuple[tuple[float, float, float, float], str]] = []

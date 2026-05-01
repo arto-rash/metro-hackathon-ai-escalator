@@ -31,6 +31,7 @@ def iou(a: BBox, b: BBox) -> float:
 class Detection:
     bbox: BBox
     head_bbox: Optional[BBox] = None
+    facing_camera: Optional[bool] = None  # True / False / None=undetermined
 
 
 @dataclass
@@ -40,6 +41,7 @@ class Track:
     last_seen: int
     age: int = 0
     head_bbox: Optional[BBox] = None
+    facing_camera: Optional[bool] = None
     history: Deque[tuple[float, float]] = field(default_factory=lambda: deque(maxlen=24))
     aspect_history: Deque[float] = field(default_factory=lambda: deque(maxlen=18))
 
@@ -82,6 +84,7 @@ class IoUTracker:
             track = self.tracks[tid]
             track.bbox = det.bbox
             track.head_bbox = det.head_bbox
+            track.facing_camera = det.facing_camera
             track.last_seen = self._frame_idx
             track.age += 1
             track.history.append(track.centroid())
@@ -95,6 +98,7 @@ class IoUTracker:
                 track_id=tid,
                 bbox=det.bbox,
                 head_bbox=det.head_bbox,
+                facing_camera=det.facing_camera,
                 last_seen=self._frame_idx,
                 age=1,
             )

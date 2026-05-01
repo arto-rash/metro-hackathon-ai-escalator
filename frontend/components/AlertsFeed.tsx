@@ -14,6 +14,7 @@ export interface AlertItem {
 
 interface Props {
   alerts: AlertItem[];
+  onJump?: (ts: number) => void;
 }
 
 const BORDER: Record<AlertItem["severity"], string> = {
@@ -21,10 +22,11 @@ const BORDER: Record<AlertItem["severity"], string> = {
   danger: "#ef4444",
 };
 
-export function AlertsFeed({ alerts }: Props) {
+export function AlertsFeed({ alerts, onJump }: Props) {
   const [verdicts, setVerdicts] = useState<Record<string, "correct" | "incorrect">>({});
 
-  const handleVerdict = async (a: AlertItem, verdict: "correct" | "incorrect") => {
+  const handleVerdict = async (e: React.MouseEvent, a: AlertItem, verdict: "correct" | "incorrect") => {
+    e.stopPropagation(); // prevent jumping when clicking feedback
     if (verdicts[a.id]) return;
     if (a.signal === "density") return;
     setVerdicts((v) => ({ ...v, [a.id]: verdict }));
@@ -55,7 +57,8 @@ export function AlertsFeed({ alerts }: Props) {
               return (
                 <li
                   key={a.id}
-                  className="rounded border-l-2 bg-zinc-950/60 px-3 py-2 text-sm"
+                  onClick={() => onJump && onJump(a.ts)}
+                  className={`rounded border-l-2 bg-zinc-950/60 px-3 py-2 text-sm ${onJump ? "cursor-pointer hover:bg-zinc-900/80" : ""}`}
                   style={{ borderColor: BORDER[a.severity] }}
                 >
                   <div className="flex items-baseline justify-between gap-2">
@@ -63,7 +66,7 @@ export function AlertsFeed({ alerts }: Props) {
                     {teachable && (
                       <span className="flex gap-1 text-xs">
                         <button
-                          onClick={() => handleVerdict(a, "correct")}
+                          onClick={(e) => handleVerdict(e, a, "correct")}
                           disabled={!!v}
                           className={`rounded px-2 py-0.5 ${
                             v === "correct"
@@ -74,7 +77,7 @@ export function AlertsFeed({ alerts }: Props) {
                           ✓ correct
                         </button>
                         <button
-                          onClick={() => handleVerdict(a, "incorrect")}
+                          onClick={(e) => handleVerdict(e, a, "incorrect")}
                           disabled={!!v}
                           className={`rounded px-2 py-0.5 ${
                             v === "incorrect"

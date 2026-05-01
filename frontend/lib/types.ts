@@ -1,6 +1,6 @@
 export type Direction = "up" | "down" | "unknown";
 
-export type Signal = "fall" | "sitting" | "counterflow" | "running" | "stuff" | "density";
+export type Signal = "fall" | "sitting" | "counterflow" | "facing_back" | "running" | "stuff" | "density";
 
 export interface PersonRisk {
   track_id: number;

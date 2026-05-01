@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FrameEvent, MetaEvent, Signal, StreamEvent, VideoItem } from "@/lib/types";
-import { analyzeWsUrl, videoFileUrl } from "@/lib/api";
+import { analyzeWsUrl, videoFileUrl, submitFeedback } from "@/lib/api";
 import { DetectionOverlay } from "./DetectionOverlay";
 import { RiskGauge } from "./RiskGauge";
 import { StatPanel } from "./StatPanel";
 import { AlertsFeed, type AlertItem } from "./AlertsFeed";
 import { StopBanner } from "./StopBanner";
+import type { PersonRisk } from "@/lib/types";
 
 interface Props {
   video: VideoItem;
@@ -38,6 +39,24 @@ export function Analyzer({ video }: Props) {
   const stopCooldownUntil = useRef(0);
 
   const seenAlertIds = useRef<Set<string>>(new Set());
+
+  const [feedbackPopup, setFeedbackPopup] = useState<{person: PersonRisk, x: number, y: number} | null>(null);
+  const handlePersonClick = useCallback((person: PersonRisk, x: number, y: number) => {
+    if (videoRef.current) {
+      videoRef.current.pause();
+    }
+    setFeedbackPopup({ person, x, y });
+  }, []);
+
+  const submitManualFeedback = async (signal: Signal) => {
+    if (!feedbackPopup) return;
+    try {
+      await submitFeedback(signal, "correct"); // false negative: make model more sensitive
+    } catch (e) {
+      console.error(e);
+    }
+    setFeedbackPopup(null);
+  };
 
   useEffect(() => {
     setFrames([]);
@@ -200,6 +219,33 @@ export function Analyzer({ video }: Props) {
 
   return (
     <div className="grid h-full gap-4 lg:grid-cols-[3fr_1.4fr]">
+      {feedbackPopup && (
+        <div
+          className="fixed z-50 flex flex-col gap-2 rounded-lg bg-zinc-900 p-3 shadow-xl ring-1 ring-zinc-700"
+          style={{
+            top: Math.max(0, Math.min(feedbackPopup.y + 15, typeof window !== "undefined" ? window.innerHeight - 200 : 0)),
+            left: Math.max(0, Math.min(feedbackPopup.x + 15, typeof window !== "undefined" ? window.innerWidth - 220 : 0))
+          }}
+        >
+          <div className="flex justify-between items-center mb-1 border-b border-zinc-700 pb-1">
+            <span className="text-xs font-semibold text-zinc-300">Missed issue for #{feedbackPopup.person.track_id}?</span>
+            <button onClick={() => setFeedbackPopup(null)} className="text-zinc-500 hover:text-zinc-300">×</button>
+          </div>
+          <div className="text-xs text-zinc-400 mb-1">Select the main problem:</div>
+          <div className="grid grid-cols-2 gap-2">
+            {(["fall", "sitting", "counterflow", "facing_back", "running", "stuff"] as Signal[]).map(sig => (
+              <button
+                key={sig}
+                onClick={() => submitManualFeedback(sig)}
+                className="rounded bg-zinc-800 px-2 py-1.5 text-xs text-zinc-300 hover:bg-emerald-900 hover:text-emerald-100 transition-colors text-left"
+              >
+                {sig}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col gap-3">
         <div ref={containerRef} className="relative aspect-video w-full overflow-hidden rounded-xl bg-black ring-1 ring-zinc-800">
           <video
@@ -220,6 +266,7 @@ export function Analyzer({ video }: Props) {
             displayWidth={size.w}
             displayHeight={size.h}
             laneSeparators={meta?.lane_separators ?? null}
+            onPersonClick={handlePersonClick}
           />
           <StopBanner active={stopActive} signal={stopSignal} onDismiss={handleStopDismiss} />
         </div>
@@ -256,7 +303,12 @@ export function Analyzer({ video }: Props) {
         </div>
         <StatPanel frame={currentFrame} recommendAlternative={recommendAlternative} />
         <div className="min-h-[18rem] flex-1">
-          <AlertsFeed alerts={alerts} />
+          <AlertsFeed
+            alerts={alerts}
+            onJump={(ts) => {
+              if (videoRef.current) videoRef.current.currentTime = ts;
+            }}
+          />
         </div>
       </div>
     </div>

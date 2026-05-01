@@ -1,14 +1,17 @@
-"""Risk scoring engine for escalator footage.
+"""Risk scoring engine for escalator footage (head-only signals).
 
 Per-signal base risk (0..1):
-    fall          1.00   pose collapse + head drop
-    sitting       0.60   pose: legs folded relative to torso
-    counterflow   0.40   person moves opposite to its lane's crowd direction
+    fall          1.00   bbox aspect collapse + sudden vertical drop
+    sitting       0.60   bbox aspect compressed + low motion (heuristic)
+    counterflow   0.40   moves opposite to its lane's crowd direction
+    facing_back   0.40   head orientation differs from lane majority
     running       0.60   speed exceeds running threshold
     stuff         0.40   bag persists on the escalator without an owner
 
-The frame's risk is max(person, stuff) on a 0..100 scale. Self-learning
-offsets from `learner.get_offsets()` raise the trigger threshold per signal.
+facing_back uses a per-track / per-lane rolling history of `facing_camera`
+(set by the haar-cascade in analyzer.py). Adapts to camera angle: anomaly
+is whichever orientation differs from the local crowd, not a hard-coded
+"facing camera = bad".
 """
 from __future__ import annotations
 
@@ -26,6 +29,7 @@ BASE_RISK = {
     "fall": 1.00,
     "sitting": 0.60,
     "counterflow": 0.40,
+    "facing_back": 0.40,
     "running": 0.60,
     "stuff": 0.40,
 }
@@ -111,6 +115,10 @@ class RiskEngine:
         self._active: dict[tuple[int, str], int] = {}
         self._density_active = False
         self._gap_frames = max(int(self.fps * 1.5), 3)
+        facing_window = max(int(self.fps * 2.5), 12)
+        self._track_facing: dict[int, deque[bool]] = {}
+        self._lane_facing: list[deque[bool]] = [deque(maxlen=facing_window * self.lanes) for _ in range(self.lanes)]
+        self._track_facing_window = facing_window
 
     def _onset(self, track_id: int, signal: str, frame_idx: int) -> bool:
         key = (track_id, signal)
@@ -169,15 +177,12 @@ class RiskEngine:
         return True, confidence
 
     def _detect_sitting(self, track: Track, offset: float) -> tuple[bool, float]:
-        """Conservative sitting heuristic using bbox aspect history.
+        """Conservative bbox-aspect sitting heuristic.
 
-        A standing adult has aspect h/w around 2.0-3.5; a sitting person on
-        an escalator step is much more compact. We require:
-          - mean aspect over the last ~1.5s below the threshold
-          - track has been alive long enough to be stable (>1.5s)
-          - the person is not falling (ruled out by min aspect floor)
-          - low net horizontal motion (sitting people don't slide sideways)
-        Offset from learner tightens the aspect threshold further.
+        Standing person has h/w ≥ ~2.0; a sitting person collapses to ~1.0.
+        Require sustained low aspect AND low horizontal motion AND mature track
+        — false positives on partially-occluded standing people are the main
+        failure mode, so we keep the gate tight.
         """
         if track.age < self.fps * 1.5 or len(track.aspect_history) < 8:
             return False, 0.0
@@ -186,17 +191,43 @@ class RiskEngine:
             return False, 0.0
         mean_aspect = sum(recent) / len(recent)
         max_aspect = max(recent)
-        threshold = 1.30 - offset * 0.6
-        if mean_aspect >= threshold or max_aspect >= threshold + 0.6:
+        threshold = 1.20 - offset * 0.5
+        if mean_aspect >= threshold or max_aspect >= threshold + 0.7:
             return False, 0.0
-
         if len(track.history) >= 2:
             (x0, _), (x1, _) = track.history[0], track.history[-1]
-            if abs(x1 - x0) / max(self.frame_width, 1) > 0.08:
+            if abs(x1 - x0) / max(self.frame_width, 1) > 0.07:
                 return False, 0.0
-
         confidence = max(0.0, min(1.0, (threshold - mean_aspect) / max(threshold, 0.2)))
         return True, 0.4 + 0.6 * confidence
+
+    def _detect_facing_back(self, track: Track, lane: int, offset: float) -> tuple[bool, float]:
+        """Lane-majority orientation anomaly.
+
+        Each track maintains a rolling deque of facing_camera observations
+        (True / False). Each lane keeps a pooled rolling deque of the same.
+        Person is "facing the wrong way" when their fraction-facing-camera
+        differs from the lane's by more than a threshold, sustained for ≥1s.
+        Adapts to either camera angle (riders facing toward or away).
+        """
+        track_hist = self._track_facing.get(track.track_id)
+        if track_hist is None or len(track_hist) < int(self.fps * 1.0):
+            return False, 0.0
+        lane_hist = self._lane_facing[lane]
+        if len(lane_hist) < int(self.fps * 2.0):
+            return False, 0.0
+
+        track_fc = sum(1 for f in track_hist if f) / len(track_hist)
+        lane_fc = sum(1 for f in lane_hist if f) / len(lane_hist)
+        diff = abs(track_fc - lane_fc)
+        threshold = 0.55 + offset * 0.4
+        if diff < threshold:
+            return False, 0.0
+        # Don't flag the loner-in-an-empty-lane case.
+        if 0.30 < lane_fc < 0.70:
+            return False, 0.0
+        confidence = min(1.0, (diff - threshold) / max(1.0 - threshold, 0.2) + 0.5)
+        return True, confidence
 
     def evaluate(
         self,
@@ -208,6 +239,21 @@ class RiskEngine:
         offsets = learner.get_offsets()
         persons: list[PersonRisk] = []
         alerts: list[Alert] = []
+
+        live_ids = {tr.track_id for tr in tracks}
+        for tid in [tid for tid in self._track_facing if tid not in live_ids]:
+            self._track_facing.pop(tid, None)
+
+        for tr in tracks:
+            if tr.facing_camera is None:
+                continue
+            cx, cy = tr.centroid()
+            lane = self._lane_for(cx, cy)
+            hist = self._track_facing.setdefault(
+                tr.track_id, deque(maxlen=self._track_facing_window)
+            )
+            hist.append(tr.facing_camera)
+            self._lane_facing[lane].append(tr.facing_camera)
 
         for tr in tracks:
             _, vy = self._person_velocity(tr)
@@ -277,6 +323,17 @@ class RiskEngine:
                             message=f"Counterflow in lane {lane + 1} — track {tr.track_id}",
                         ))
 
+            is_face, face_conf = self._detect_facing_back(tr, lane, offsets["facing_back"])
+            if is_face:
+                flags.append("facing_back")
+                risk = max(risk, BASE_RISK["facing_back"] * (0.7 + 0.3 * face_conf))
+                if self._onset(tr.track_id, "facing_back", frame_idx):
+                    alerts.append(Alert(
+                        id=f"{frame_idx}-{tr.track_id}-facing_back",
+                        signal="facing_back", track_id=tr.track_id, severity="warn",
+                        message=f"Facing backward on escalator — track {tr.track_id}",
+                    ))
+
             speed_norm = (vx * vx + vy * vy) ** 0.5 / max(run_norm_unit, 1e-6)
             run_threshold = 1.4 + offsets["running"] * 3.0
             if speed_norm > run_threshold and tr.age > self.fps * 1.0:
@@ -291,7 +348,8 @@ class RiskEngine:
 
             if risk > max_risk:
                 max_risk = risk
-                dominant_signal = flags[-1] if flags else dominant_signal
+                if flags:
+                    dominant_signal = max(flags, key=lambda f: BASE_RISK.get(f, 0.0))
 
             persons.append(PersonRisk(
                 track_id=tr.track_id,

@@ -11,9 +11,10 @@ interface Props {
   displayWidth: number;
   displayHeight: number;
   laneSeparators: LaneSeparator[] | null;
+  onPersonClick?: (person: import("@/lib/types").PersonRisk, x: number, y: number) => void;
 }
 
-export function DetectionOverlay({ frame, videoWidth, videoHeight, displayWidth, displayHeight, laneSeparators }: Props) {
+export function DetectionOverlay({ frame, videoWidth, videoHeight, displayWidth, displayHeight, laneSeparators, onPersonClick }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -110,7 +111,31 @@ export function DetectionOverlay({ frame, videoWidth, videoHeight, displayWidth,
       ctx.fillStyle = "#0a0a0f";
       ctx.fillText(label, x + 4, y - 4);
     }
-  }, [frame, videoWidth, videoHeight, displayWidth, displayHeight]);
+  }, [frame, videoWidth, videoHeight, displayWidth, displayHeight, laneSeparators]);
 
-  return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />;
+  const sx = videoWidth > 0 ? displayWidth / videoWidth : 1;
+  const sy = videoHeight > 0 ? displayHeight / videoHeight : 1;
+
+  return (
+    <>
+      <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
+      {frame && onPersonClick && videoWidth > 0 && videoHeight > 0 && frame.persons.map((p) => (
+        <div
+          key={p.track_id}
+          className="absolute cursor-pointer"
+          title={`Report missed issue for #${p.track_id}`}
+          style={{
+            left: p.bbox[0] * sx,
+            top: p.bbox[1] * sy,
+            width: (p.bbox[2] - p.bbox[0]) * sx,
+            height: (p.bbox[3] - p.bbox[1]) * sy,
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPersonClick(p, e.clientX, e.clientY);
+          }}
+        />
+      ))}
+    </>
+  );
 }

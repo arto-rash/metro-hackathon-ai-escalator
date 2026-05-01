@@ -1,7 +1,8 @@
 {
   "fall": 0.42,
   "sitting": 0.5,
-  "counterflow": 0.12,
+  "counterflow": 0.5,
+  "facing_back": 0.18,
   "running": 0.0,
   "stuff": 0.0
 }
