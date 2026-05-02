@@ -68,9 +68,12 @@ export interface ErrorEvent {
 
 export type StreamEvent = FrameEvent | MetaEvent | DoneEvent | ErrorEvent;
 
+export type VideoCategory = "escalator" | "platform" | "entrance";
+
 export interface VideoItem {
   id: string;
   name: string;
   source: "sample" | "upload";
   size: number;
+  category?: VideoCategory;
 }

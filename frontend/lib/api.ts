@@ -1,7 +1,11 @@
 import type { Signal, VideoItem } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-export const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000";
+// Derive WS URL from API URL automatically: http→ws, https→wss
+// This avoids having to set a separate env var and ensures HTTPS sites use wss://
+export const WS_URL =
+  process.env.NEXT_PUBLIC_WS_URL ??
+  API_URL.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
 
 export async function listVideos(): Promise<VideoItem[]> {
   const r = await fetch(`${API_URL}/api/videos`, { cache: "no-store" });
@@ -10,9 +14,10 @@ export async function listVideos(): Promise<VideoItem[]> {
   return data.videos as VideoItem[];
 }
 
-export async function uploadVideo(file: File): Promise<VideoItem> {
+export async function uploadVideo(file: File, category = "escalator"): Promise<VideoItem> {
   const fd = new FormData();
   fd.append("file", file);
+  fd.append("category", category);
   const r = await fetch(`${API_URL}/api/videos/upload`, { method: "POST", body: fd });
   if (!r.ok) throw new Error(`upload failed: ${r.status}`);
   return (await r.json()) as VideoItem;

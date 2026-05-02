@@ -122,8 +122,8 @@ export function DetectionOverlay({ frame, videoWidth, videoHeight, displayWidth,
       {frame && onPersonClick && videoWidth > 0 && videoHeight > 0 && frame.persons.map((p) => (
         <div
           key={p.track_id}
-          className="absolute cursor-pointer"
-          title={`Report missed issue for #${p.track_id}`}
+          className="absolute cursor-pointer rounded transition-all hover:bg-white/5 hover:ring-1 hover:ring-white/20"
+          title={p.flags.length > 0 ? `Override / report more for #${p.track_id}` : `Report missed violation for #${p.track_id}`}
           style={{
             left: p.bbox[0] * sx,
             top: p.bbox[1] * sy,

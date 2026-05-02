@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -22,14 +23,41 @@ SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
+# Explicit origins always allowed (local dev). Production HTTPS origins are
+# covered by allow_origin_regex so no env var is needed for typical Vercel deploys.
+_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:8000",
+    *[o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()],
+]
+
 app = FastAPI(title="MetroEscalator Risk Analyzer")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
+    allow_origin_regex=r"https://.*",   # covers Vercel, Render, and any other HTTPS host
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+_VALID_CATEGORIES = {"escalator", "platform", "entrance"}
+
+
+def _meta_path(video_id: str) -> Path:
+    return UPLOAD_DIR / f"{video_id}.json"
+
+
+def _get_category(video_id: str) -> str:
+    p = _meta_path(video_id)
+    if p.exists():
+        try:
+            return json.loads(p.read_text()).get("category", "escalator")
+        except Exception:
+            pass
+    return "escalator"
 
 
 def _resolve_video(video_id: str) -> Path:
@@ -51,12 +79,15 @@ def list_videos() -> dict:
     for root, source in ((SAMPLE_DIR, "sample"), (UPLOAD_DIR, "upload")):
         for path in sorted(root.iterdir()):
             if path.is_file() and path.suffix.lower() in ALLOWED_EXTS:
-                items.append({"id": path.stem, "name": path.name, "source": source, "size": path.stat().st_size})
+                category = _get_category(path.stem) if source == "upload" else "escalator"
+                items.append({"id": path.stem, "name": path.name, "source": source, "size": path.stat().st_size, "category": category})
     return {"videos": items}
 
 
 @app.post("/api/videos/upload")
-async def upload_video(file: UploadFile) -> dict:
+async def upload_video(file: UploadFile, category: str = Form("escalator")) -> dict:
+    if category not in _VALID_CATEGORIES:
+        category = "escalator"
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTS:
         raise HTTPException(status_code=400, detail=f"Unsupported file type {suffix!r}")
@@ -64,7 +95,8 @@ async def upload_video(file: UploadFile) -> dict:
     dest = UPLOAD_DIR / f"{video_id}{suffix}"
     with dest.open("wb") as out:
         shutil.copyfileobj(file.file, out)
-    return {"id": video_id, "name": dest.name, "source": "upload", "size": dest.stat().st_size}
+    _meta_path(video_id).write_text(json.dumps({"category": category}))
+    return {"id": video_id, "name": dest.name, "source": "upload", "size": dest.stat().st_size, "category": category}
 
 
 @app.get("/api/videos/{video_id}/file")

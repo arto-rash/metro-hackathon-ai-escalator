@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FrameEvent, MetaEvent, Signal, StreamEvent, VideoItem } from "@/lib/types";
 import { analyzeWsUrl, videoFileUrl, submitFeedback } from "@/lib/api";
+import { SIGNAL_INFO } from "@/lib/signals";
 import { DetectionOverlay } from "./DetectionOverlay";
 import { RiskGauge } from "./RiskGauge";
 import { StatPanel } from "./StatPanel";
@@ -20,6 +21,15 @@ const STOP_THRESHOLD = 95;
 const STOP_COOLDOWN_MS = 30_000;
 const ALT_WINDOW_MS = 5_000;
 const ALT_AVG_THRESHOLD = 60;
+
+// Platform/entrance → expected seconds until escalator impact
+const PREDICTION_DELAY: Record<string, number> = {
+  platform: 60,
+  entrance: 90,
+};
+
+// How many platform people per escalator capacity slot (rough factor)
+const PLATFORM_ESCALATOR_RATIO = 0.75;
 
 export function Analyzer({ video }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -40,18 +50,21 @@ export function Analyzer({ video }: Props) {
 
   const seenAlertIds = useRef<Set<string>>(new Set());
 
-  const [feedbackPopup, setFeedbackPopup] = useState<{person: PersonRisk, x: number, y: number} | null>(null);
+  const [feedbackPopup, setFeedbackPopup] = useState<{
+    person: PersonRisk;
+    x: number;
+    y: number;
+  } | null>(null);
+
   const handlePersonClick = useCallback((person: PersonRisk, x: number, y: number) => {
-    if (videoRef.current) {
-      videoRef.current.pause();
-    }
+    if (videoRef.current) videoRef.current.pause();
     setFeedbackPopup({ person, x, y });
   }, []);
 
-  const submitManualFeedback = async (signal: Signal) => {
+  const submitManualFeedback = async (signal: Signal, verdict: "correct" | "incorrect" = "correct") => {
     if (!feedbackPopup) return;
     try {
-      await submitFeedback(signal, "correct"); // false negative: make model more sensitive
+      await submitFeedback(signal, verdict);
     } catch (e) {
       console.error(e);
     }
@@ -68,6 +81,7 @@ export function Analyzer({ video }: Props) {
     setStopSignal(null);
     seenAlertIds.current = new Set();
     stopCooldownUntil.current = 0;
+    setFeedbackPopup(null);
     setConn("connecting");
 
     const ws = new WebSocket(analyzeWsUrl(video.id));
@@ -115,9 +129,7 @@ export function Analyzer({ video }: Props) {
       setConn((c) => (c === "streaming" ? "done" : c));
     };
 
-    return () => {
-      ws.close();
-    };
+    return () => ws.close();
   }, [video.id]);
 
   useEffect(() => {
@@ -131,12 +143,8 @@ export function Analyzer({ video }: Props) {
         let lo = 0, hi = arr.length - 1, best = 0;
         while (lo <= hi) {
           const mid = (lo + hi) >> 1;
-          if (arr[mid].timestamp <= t) {
-            best = mid;
-            lo = mid + 1;
-          } else {
-            hi = mid - 1;
-          }
+          if (arr[mid].timestamp <= t) { best = mid; lo = mid + 1; }
+          else hi = mid - 1;
         }
         setCurrentFrame(arr[best]);
       }
@@ -147,9 +155,7 @@ export function Analyzer({ video }: Props) {
   }, [frames]);
 
   useEffect(() => {
-    if (!currentFrame) return;
-    if (stopActive) return;
-    if (Date.now() < stopCooldownUntil.current) return;
+    if (!currentFrame || stopActive || Date.now() < stopCooldownUntil.current) return;
     if (currentFrame.risk_score >= STOP_THRESHOLD) {
       setStopSignal(currentFrame.dominant_signal);
       setStopActive(true);
@@ -165,9 +171,7 @@ export function Analyzer({ video }: Props) {
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      setSize({ w: el.clientWidth, h: el.clientHeight });
-    });
+    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -178,8 +182,7 @@ export function Analyzer({ video }: Props) {
     if (!currentFrame || frames.length < 4) return false;
     const tEnd = currentFrame.timestamp;
     const tStart = tEnd - ALT_WINDOW_MS / 1000;
-    let sum = 0;
-    let n = 0;
+    let sum = 0, n = 0;
     for (let i = frames.length - 1; i >= 0; i--) {
       const f = frames[i];
       if (f.timestamp > tEnd) continue;
@@ -199,55 +202,103 @@ export function Analyzer({ video }: Props) {
   }, [conn, frames.length]);
 
   const handleExport = () => {
+    if (frames.length === 0) return;
+
+    const BUCKET_SEC = 60;
+    const totalSec = frames[frames.length - 1].timestamp;
+    const bucketCount = Math.max(1, Math.ceil(totalSec / BUCKET_SEC));
+
+    const alertCounts: Record<string, number> = {};
+    for (const a of alerts) alertCounts[a.signal] = (alertCounts[a.signal] ?? 0) + 1;
+
+    const allRisks = frames.map((f) => f.risk_score);
+    const avgRisk = allRisks.reduce((s, v) => s + v, 0) / allRisks.length;
+    const peakRisk = Math.max(...allRisks);
+    const peakFrame = frames.find((f) => f.risk_score === peakRisk);
+
+    const timeline = Array.from({ length: bucketCount }, (_, i) => {
+      const tStart = i * BUCKET_SEC;
+      const tEnd = tStart + BUCKET_SEC;
+      const bucket = frames.filter((f) => f.timestamp >= tStart && f.timestamp < tEnd);
+      if (bucket.length === 0) return null;
+      const bucketAlerts = alerts.filter((a) => a.ts >= tStart && a.ts < tEnd);
+      const bucketRisks = bucket.map((f) => f.risk_score);
+      const mins = Math.floor(tStart / 60);
+      const secs = Math.round(tStart % 60);
+      return {
+        period: `${mins}:${String(secs).padStart(2, "0")} – ${Math.floor(tEnd / 60)}:${String(Math.round(tEnd % 60)).padStart(2, "0")}`,
+        avg_risk: Math.round(bucketRisks.reduce((s, v) => s + v, 0) / bucketRisks.length),
+        peak_risk: Math.round(Math.max(...bucketRisks)),
+        avg_people: Math.round(bucket.reduce((s, f) => s + f.person_count, 0) / bucket.length),
+        max_density_pct: Math.round(Math.max(...bucket.map((f) => f.density)) * 100),
+        alerts: bucketAlerts.map((a) => ({
+          time: `${Math.floor(a.ts / 60)}:${String(Math.round(a.ts % 60)).padStart(2, "0")}`,
+          type: a.signal,
+          severity: a.severity,
+          message: a.message,
+        })),
+      };
+    }).filter(Boolean);
+
     const payload = {
-      video: { id: video.id, name: video.name },
-      meta,
       exported_at: new Date().toISOString(),
-      frames,
-      alerts,
+      video: { name: video.name, category: video.category ?? "escalator" },
+      analysis: {
+        duration: `${Math.floor(totalSec / 60)}m ${Math.round(totalSec % 60)}s`,
+        frames_processed: frames.length,
+        fps_effective: meta ? +(meta.fps / meta.stride).toFixed(1) : null,
+        resolution: meta ? `${meta.width}×${meta.height}` : null,
+        lanes: meta?.lanes ?? null,
+      },
+      summary: {
+        avg_risk_score: Math.round(avgRisk),
+        peak_risk_score: Math.round(peakRisk),
+        peak_risk_at: peakFrame
+          ? `${Math.floor(peakFrame.timestamp / 60)}:${String(Math.round(peakFrame.timestamp % 60)).padStart(2, "0")}`
+          : null,
+        total_alerts: alerts.length,
+        alert_breakdown: alertCounts,
+        max_density_pct: Math.round(Math.max(...frames.map((f) => f.density)) * 100),
+        avg_people_on_escalator: Math.round(
+          frames.reduce((s, f) => s + f.person_count, 0) / frames.length,
+        ),
+      },
+      timeline,
     };
+
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `metro-escalator-${video.name.replace(/\.[^.]+$/, "")}-${Date.now()}.json`;
+    a.download = `metro-report-${video.name.replace(/\.[^.]+$/, "")}-${Date.now()}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
   };
 
+  const isPredictive = video.category === "platform" || video.category === "entrance";
+  const predDelay = PREDICTION_DELAY[video.category ?? "escalator"] ?? 60;
+
   return (
     <div className="grid h-full gap-4 lg:grid-cols-[3fr_1.4fr]">
+      {/* ── Feedback popup ── */}
       {feedbackPopup && (
-        <div
-          className="fixed z-50 flex flex-col gap-2 rounded-lg bg-zinc-900 p-3 shadow-xl ring-1 ring-zinc-700"
-          style={{
-            top: Math.max(0, Math.min(feedbackPopup.y + 15, typeof window !== "undefined" ? window.innerHeight - 200 : 0)),
-            left: Math.max(0, Math.min(feedbackPopup.x + 15, typeof window !== "undefined" ? window.innerWidth - 220 : 0))
-          }}
-        >
-          <div className="flex justify-between items-center mb-1 border-b border-zinc-700 pb-1">
-            <span className="text-xs font-semibold text-zinc-300">Missed issue for #{feedbackPopup.person.track_id}?</span>
-            <button onClick={() => setFeedbackPopup(null)} className="text-zinc-500 hover:text-zinc-300">×</button>
-          </div>
-          <div className="text-xs text-zinc-400 mb-1">Select the main problem:</div>
-          <div className="grid grid-cols-2 gap-2">
-            {(["fall", "sitting", "counterflow", "facing_back", "running", "stuff"] as Signal[]).map(sig => (
-              <button
-                key={sig}
-                onClick={() => submitManualFeedback(sig)}
-                className="rounded bg-zinc-800 px-2 py-1.5 text-xs text-zinc-300 hover:bg-emerald-900 hover:text-emerald-100 transition-colors text-left"
-              >
-                {sig}
-              </button>
-            ))}
-          </div>
-        </div>
+        <FeedbackPopup
+          person={feedbackPopup.person}
+          x={feedbackPopup.x}
+          y={feedbackPopup.y}
+          onSubmit={submitManualFeedback}
+          onClose={() => setFeedbackPopup(null)}
+        />
       )}
 
+      {/* ── Left column: video + status bar ── */}
       <div className="flex flex-col gap-3">
-        <div ref={containerRef} className="relative aspect-video w-full overflow-hidden rounded-xl bg-black ring-1 ring-zinc-800">
+        <div
+          ref={containerRef}
+          className="relative aspect-video w-full overflow-hidden rounded-xl bg-black ring-1 ring-zinc-800"
+        >
           <video
             ref={videoRef}
             src={fileUrl}
@@ -269,8 +320,19 @@ export function Analyzer({ video }: Props) {
             onPersonClick={handlePersonClick}
           />
           <StopBanner active={stopActive} signal={stopSignal} onDismiss={handleStopDismiss} />
+
+          {/* Predictive camera label */}
+          {isPredictive && (
+            <div className="absolute left-3 top-3 rounded-lg bg-zinc-900/90 px-3 py-1.5 text-xs ring-1 ring-zinc-700">
+              <span className="text-zinc-400">
+                {video.category === "platform" ? "Platform Camera" : "Entrance Camera"}
+              </span>
+              <span className="ml-2 text-zinc-500">· predicts escalator load in ~{predDelay}s</span>
+            </div>
+          )}
         </div>
 
+        {/* Status bar */}
         <div className="flex items-center justify-between rounded-lg bg-zinc-900/60 px-4 py-2 ring-1 ring-zinc-800">
           <div className="flex items-center gap-3">
             <span className="h-2 w-2 rounded-full" style={{ background: status.color }} />
@@ -278,7 +340,9 @@ export function Analyzer({ video }: Props) {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-zinc-500">
-              {meta ? `${meta.width}×${meta.height} · ${meta.fps.toFixed(1)} fps · stride ${meta.stride} · ${meta.lanes} lanes` : "—"}
+              {meta
+                ? `${meta.width}×${meta.height} · ${meta.fps.toFixed(1)} fps · stride ${meta.stride} · ${meta.lanes} lanes`
+                : "—"}
             </span>
             <button
               onClick={handleExport}
@@ -297,11 +361,19 @@ export function Analyzer({ video }: Props) {
         )}
       </div>
 
+      {/* ── Right column: gauge, stats, predictive panel, alerts ── */}
       <div className="flex flex-col gap-4">
-        <div className="rounded-xl bg-zinc-900/60 p-4 ring-1 ring-zinc-800">
-          <RiskGauge score={currentFrame?.risk_score ?? 0} label="Risk score" />
-        </div>
-        <StatPanel frame={currentFrame} recommendAlternative={recommendAlternative} />
+        {isPredictive ? (
+          <PredictivePanel frame={currentFrame} delay={predDelay} category={video.category!} />
+        ) : (
+          <>
+            <div className="rounded-xl bg-zinc-900/60 p-4 ring-1 ring-zinc-800">
+              <RiskGauge score={currentFrame?.risk_score ?? 0} label="Risk score" />
+            </div>
+            <StatPanel frame={currentFrame} recommendAlternative={recommendAlternative} />
+          </>
+        )}
+
         <div className="min-h-[18rem] flex-1">
           <AlertsFeed
             alerts={alerts}
@@ -311,6 +383,168 @@ export function Analyzer({ video }: Props) {
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Feedback popup component ────────────────────────────────────────────────
+
+interface FeedbackPopupProps {
+  person: PersonRisk;
+  x: number;
+  y: number;
+  onSubmit: (signal: Signal, verdict: "correct" | "incorrect") => void;
+  onClose: () => void;
+}
+
+function FeedbackPopup({ person, x, y, onSubmit, onClose }: FeedbackPopupProps) {
+  const winH = typeof window !== "undefined" ? window.innerHeight : 800;
+  const winW = typeof window !== "undefined" ? window.innerWidth : 1200;
+  const top = Math.max(8, Math.min(y + 12, winH - 380));
+  const left = Math.max(8, Math.min(x + 12, winW - 296));
+
+  const isFlagged = person.flags.length > 0;
+
+  return (
+    <div
+      className="fixed z-50 w-72 rounded-xl bg-zinc-900 shadow-2xl ring-1 ring-zinc-700"
+      style={{ top, left }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-zinc-200">Person #{person.track_id}</span>
+          <span
+            className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+              isFlagged ? "bg-rose-900/60 text-rose-300" : "bg-emerald-900/50 text-emerald-300"
+            }`}
+          >
+            {isFlagged ? "Flagged" : "Safe"}
+          </span>
+        </div>
+        <button
+          onClick={onClose}
+          className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+        >
+          ✕
+        </button>
+      </div>
+
+      {/* Currently detected flags — allow marking wrong */}
+      {isFlagged && (
+        <div className="border-b border-zinc-800 px-4 py-3">
+          <p className="mb-2 text-xs text-zinc-500">AI detected:</p>
+          <div className="space-y-1">
+            {person.flags.map((f) => (
+              <div key={f} className="flex items-center justify-between gap-2">
+                <span className="text-xs text-rose-300">{SIGNAL_INFO[f]?.label ?? f}</span>
+                <button
+                  onClick={() => onSubmit(f as Signal, "incorrect")}
+                  className="shrink-0 rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-500 hover:bg-rose-900/50 hover:text-rose-300"
+                >
+                  ✗ wrong
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Report missed violation */}
+      <div className="px-4 py-3">
+        <p className="mb-2 text-xs text-zinc-500">
+          {isFlagged ? "Also report missed violation:" : "Which rule is being broken?"}
+        </p>
+        <div className="space-y-1">
+          {(Object.entries(SIGNAL_INFO) as [string, { label: string; description: string }][])
+            .filter(([k]) => k !== "density")
+            .map(([sig, info]) => {
+              const already = person.flags.includes(sig);
+              return (
+                <button
+                  key={sig}
+                  onClick={() => !already && onSubmit(sig as Signal, "correct")}
+                  disabled={already}
+                  title={info.description}
+                  className={`flex w-full items-center justify-between gap-2 rounded px-2.5 py-1.5 text-xs transition-colors ${
+                    already
+                      ? "cursor-default bg-zinc-800/40 text-zinc-600"
+                      : "bg-zinc-800 text-zinc-300 hover:bg-emerald-900/60 hover:text-emerald-200"
+                  }`}
+                >
+                  <span className="text-left">{info.label}</span>
+                  {already && <span className="shrink-0 text-zinc-700">detected ✓</span>}
+                </button>
+              );
+            })}
+        </div>
+      </div>
+
+      <div className="border-t border-zinc-800 px-4 py-2 text-xs text-zinc-600">
+        Feedback trains the AI threshold in real time
+      </div>
+    </div>
+  );
+}
+
+// ── Predictive load panel ──────────────────────────────────────────────────
+
+interface PredictivePanelProps {
+  frame: FrameEvent | null;
+  delay: number;
+  category: string;
+}
+
+function PredictivePanel({ frame, delay, category }: PredictivePanelProps) {
+  const count = frame?.person_count ?? 0;
+  const predicted = Math.round(count * PLATFORM_ESCALATOR_RATIO);
+  const densityPct = Math.round((frame?.density ?? 0) * 100);
+
+  return (
+    <div className="rounded-xl bg-zinc-900/60 p-4 ring-1 ring-zinc-800 space-y-4">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+          {category === "platform" ? "Platform" : "Entrance"} · Predictive Load
+        </p>
+        <p className="mt-0.5 text-xs text-zinc-600">
+          People detected here will reach the escalator in ~{delay}s
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-lg bg-zinc-800 p-3">
+          <p className="text-xs text-zinc-500">Current Count</p>
+          <p className="mt-1 text-2xl font-bold text-zinc-100">{count}</p>
+          <p className="text-xs text-zinc-500">people visible</p>
+        </div>
+        <div className="rounded-lg bg-zinc-800 p-3">
+          <p className="text-xs text-zinc-500">Predicted Escalator Load</p>
+          <p className="mt-1 text-2xl font-bold text-blue-300">+{predicted}</p>
+          <p className="text-xs text-zinc-500">in ~{delay}s</p>
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-1 flex justify-between text-xs text-zinc-500">
+          <span>{category === "platform" ? "Platform" : "Area"} density</span>
+          <span>{densityPct}%</span>
+        </div>
+        <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
+          <div
+            className="h-full rounded-full transition-all duration-500"
+            style={{
+              width: `${densityPct}%`,
+              background: densityPct > 70 ? "#ef4444" : densityPct > 45 ? "#f59e0b" : "#10b981",
+            }}
+          />
+        </div>
+      </div>
+
+      {predicted > 8 && (
+        <div className="rounded-lg border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+          ⚠ High predicted influx — consider preparing secondary escalator now
+        </div>
+      )}
     </div>
   );
 }
