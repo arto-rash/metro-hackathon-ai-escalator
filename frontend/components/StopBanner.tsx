@@ -52,7 +52,7 @@ export function StopBanner({ active, signal, onDismiss }: Props) {
   if (phase === "stopped") {
     return (
       <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center bg-red-950/90 px-4 py-3 text-center text-lg font-semibold text-red-100 ring-2 ring-red-700">
-        Stopped myself
+        Avtomatik dayandırıldı
       </div>
     );
   }
@@ -60,16 +60,16 @@ export function StopBanner({ active, signal, onDismiss }: Props) {
   return (
     <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-4 bg-red-600/95 px-5 py-4 ring-2 ring-red-300 shadow-lg shadow-red-900/50">
       <div className="text-2xl font-bold uppercase tracking-widest text-white">
-        Stop
+        DAYAN
       </div>
       <div className="flex-1 text-sm text-red-50">
-        Critical risk{signal ? ` · ${signal}` : ""}. Auto-stop in 8s if not ignored.
+        Kritik risk{signal ? ` · ${signal}` : ""}. 8 saniyə ərzində ləğv edilməsə avtomatik dayandırılacaq.
       </div>
       <button
         onClick={handleIgnore}
         className="rounded bg-white/95 px-4 py-1.5 text-sm font-semibold text-red-700 hover:bg-white"
       >
-        Ignore
+        Ləğv et
       </button>
     </div>
   );

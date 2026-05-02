@@ -10,9 +10,9 @@ interface Props {
 }
 
 const CAT_LABELS: Record<VideoCategory, string> = {
-  escalator: "Escalator",
-  platform: "Platform",
-  entrance: "Entrance",
+  escalator: "Eskalator",
+  platform: "Platforma",
+  entrance: "Giriş",
 };
 
 const CAT_COLORS: Record<VideoCategory, string> = {
@@ -69,13 +69,13 @@ export function VideoSelector({ selected, onSelect }: Props) {
   return (
     <div className="rounded-xl bg-zinc-900/60 p-4 ring-1 ring-zinc-800">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Sources</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Mənbələr</h2>
         <button
           onClick={refresh}
           disabled={loading}
           className="text-xs text-zinc-500 hover:text-zinc-300"
         >
-          {loading ? "…" : "refresh"}
+          {loading ? "…" : "yenilə"}
         </button>
       </div>
 
@@ -83,7 +83,7 @@ export function VideoSelector({ selected, onSelect }: Props) {
       <div className="mb-4 max-h-52 overflow-auto rounded-lg border border-zinc-800">
         {videos.length === 0 ? (
           <div className="px-3 py-6 text-center text-sm text-zinc-600">
-            Drop videos in <code className="text-zinc-400">backend/videos/</code> or upload below.
+            <code className="text-zinc-400">backend/videos/</code> qovluğuna video əlavə edin və ya aşağıdan yükləyin.
           </div>
         ) : (
           <>
@@ -121,7 +121,7 @@ export function VideoSelector({ selected, onSelect }: Props) {
       {/* Upload section */}
       <div className="space-y-2">
         <div>
-          <label className="mb-1 block text-xs text-zinc-500">Camera type</label>
+          <label className="mb-1 block text-xs text-zinc-500">Kamera növü</label>
           <div className="grid grid-cols-3 gap-1">
             {(["escalator", "platform", "entrance"] as VideoCategory[]).map((cat) => (
               <button
@@ -144,15 +144,15 @@ export function VideoSelector({ selected, onSelect }: Props) {
           </div>
           <p className="mt-1 text-xs text-zinc-600">
             {uploadCategory === "platform"
-              ? "Platform feed · predicts escalator load ~60s ahead"
+              ? "Platforma axını · eskalator yükünü ~60s əvvəl proqnozlaşdırır"
               : uploadCategory === "entrance"
-              ? "Entrance feed · predicts escalator load ~90s ahead"
-              : "Escalator feed · real-time safety monitoring"}
+              ? "Giriş axını · eskalator yükünü ~90s əvvəl proqnozlaşdırır"
+              : "Eskalator axını · real vaxtda təhlükəsizlik monitorinqi"}
           </p>
         </div>
 
         <label className="block">
-          <span className="sr-only">Upload video</span>
+          <span className="sr-only">Video yüklə</span>
           <input
             ref={fileInput}
             type="file"

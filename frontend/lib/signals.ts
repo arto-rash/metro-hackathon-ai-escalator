@@ -5,31 +5,31 @@ export interface SignalInfo {
 
 export const SIGNAL_INFO: Record<string, SignalInfo> = {
   fall: {
-    label: "Fell / Collapsed",
-    description: "Person fell or collapsed on the escalator",
+    label: "Yıxıldı / Çökdü",
+    description: "Sərnişin eskalatorda yıxıldı və ya çökdü",
   },
   sitting: {
-    label: "Sitting on step / railing",
-    description: "Sürahinin üstündə oturmaq — sitting on the escalator step or railing (qadağandır)",
+    label: "Pillədə / sürahidə oturmaq",
+    description: "Sürahinin üstündə oturmaq qadağandır",
   },
   counterflow: {
-    label: "Moving against direction",
-    description: "Eskalatorda əks istiqamətdə hərəkət — moving opposite to escalator direction",
+    label: "Əks istiqamətdə hərəkət",
+    description: "Eskalatorun hərəkət istiqamətinə zidd hərəkət",
   },
   facing_back: {
-    label: "Facing backwards",
-    description: "Person is facing the wrong way on the escalator",
+    label: "Arxası ilə dayanır",
+    description: "Sərnişin eskalatorda yanlış istiqamətə baxır",
   },
   running: {
-    label: "Running on escalator",
-    description: "Eskalatorda qaçmaq qadağandır — person running on the escalator",
+    label: "Eskalatorda qaçmaq",
+    description: "Eskalatorda qaçmaq qadağandır",
   },
   stuff: {
-    label: "Unattended bag / item",
-    description: "Nəzarətsiz əşya — bag or item left unattended on escalator; throwing items also flagged",
+    label: "Nəzarətsiz çanta / əşya",
+    description: "Eskalatorda nəzarətsiz qoyulmuş çanta və ya əşya",
   },
   density: {
-    label: "Overcrowding",
-    description: "Too many people on the escalator at once — capacity exceeded",
+    label: "Həddindən artıq sıxlıq",
+    description: "Eskalatorda eyni anda çox sayda insan — tutum aşıldı",
   },
 };

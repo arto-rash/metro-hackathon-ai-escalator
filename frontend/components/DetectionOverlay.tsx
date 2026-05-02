@@ -32,37 +32,40 @@ export function DetectionOverlay({ frame, videoWidth, videoHeight, displayWidth,
     const sy = displayHeight / videoHeight;
 
     const seps = laneSeparators ?? [];
-    const lanes = seps.length + 1;
-    ctx.save();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "rgba(56, 189, 248, 0.9)";
-    ctx.shadowColor = "rgba(0, 0, 0, 0.7)";
-    ctx.shadowBlur = 4;
-    for (const [[tx, ty], [bx, by]] of seps) {
-      ctx.beginPath();
-      ctx.moveTo(tx * displayWidth, ty * displayHeight);
-      ctx.lineTo(bx * displayWidth, by * displayHeight);
-      ctx.stroke();
-    }
-    ctx.shadowBlur = 0;
+    if (seps.length > 0) {
+      const lanes = seps.length + 1;
+      ctx.save();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.9)";
+      ctx.shadowColor = "rgba(0, 0, 0, 0.7)";
+      ctx.shadowBlur = 4;
+      for (const [[tx, ty], [bx, by]] of seps) {
+        ctx.beginPath();
+        ctx.moveTo(tx * displayWidth, ty * displayHeight);
+        ctx.lineTo(bx * displayWidth, by * displayHeight);
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
 
-    const bottomYs: number[] = [0, ...seps.map((s) => s[1][0]), 1];
-    ctx.font = "bold 12px ui-sans-serif, system-ui";
-    ctx.textBaseline = "middle";
-    for (let i = 0; i < lanes; i++) {
-      const cxNorm = (bottomYs[i] + bottomYs[i + 1]) / 2;
-      const cx = cxNorm * displayWidth;
-      const cy = displayHeight - 18;
-      const dir = frame.lane_directions?.[i] ?? "unknown";
-      const text = `Lane ${i + 1} · ${dir}`;
-      const tw = ctx.measureText(text).width;
-      ctx.fillStyle = "rgba(2, 6, 23, 0.75)";
-      ctx.fillRect(cx - tw / 2 - 6, cy - 10, tw + 12, 20);
-      ctx.fillStyle = "rgba(56, 189, 248, 1)";
-      ctx.fillText(text, cx - tw / 2, cy);
+      const bottomYs: number[] = [0, ...seps.map((s) => s[1][0]), 1];
+      ctx.font = "bold 12px ui-sans-serif, system-ui";
+      ctx.textBaseline = "middle";
+      for (let i = 0; i < lanes; i++) {
+        const cxNorm = (bottomYs[i] + bottomYs[i + 1]) / 2;
+        const cx = cxNorm * displayWidth;
+        const cy = displayHeight - 18;
+        const dir = frame.lane_directions?.[i] ?? "unknown";
+        const dirAz = dir === "up" ? "yuxarı" : dir === "down" ? "aşağı" : "—";
+        const text = `Zolaq ${i + 1} · ${dirAz}`;
+        const tw = ctx.measureText(text).width;
+        ctx.fillStyle = "rgba(2, 6, 23, 0.75)";
+        ctx.fillRect(cx - tw / 2 - 6, cy - 10, tw + 12, 20);
+        ctx.fillStyle = "rgba(56, 189, 248, 1)";
+        ctx.fillText(text, cx - tw / 2, cy);
+      }
+      ctx.textBaseline = "alphabetic";
+      ctx.restore();
     }
-    ctx.textBaseline = "alphabetic";
-    ctx.restore();
 
     ctx.font = "12px ui-sans-serif, system-ui";
     ctx.lineWidth = 2;
@@ -77,7 +80,7 @@ export function DetectionOverlay({ frame, videoWidth, videoHeight, displayWidth,
       ctx.setLineDash(obj.stationary ? [] : [3, 3]);
       ctx.strokeRect(x, y, w, h);
       ctx.setLineDash([]);
-      const label = obj.stationary ? `${obj.cls} (left)` : obj.cls;
+      const label = obj.stationary ? `${obj.cls} (qoyulmuş)` : obj.cls;
       ctx.fillStyle = obj.stationary ? "#a855f7" : "#a8a29e";
       const tw = ctx.measureText(label).width + 8;
       ctx.fillRect(x, y - 16, tw, 16);
@@ -123,7 +126,7 @@ export function DetectionOverlay({ frame, videoWidth, videoHeight, displayWidth,
         <div
           key={p.track_id}
           className="absolute cursor-pointer rounded transition-all hover:bg-white/5 hover:ring-1 hover:ring-white/20"
-          title={p.flags.length > 0 ? `Override / report more for #${p.track_id}` : `Report missed violation for #${p.track_id}`}
+          title={p.flags.length > 0 ? `#${p.track_id} üçün düzəliş / əlavə bildiriş` : `#${p.track_id} üçün qaçırılan pozuntu bildirişi`}
           style={{
             left: p.bbox[0] * sx,
             top: p.bbox[1] * sy,

@@ -149,11 +149,13 @@ class VideoAnalyzer:
         stride: int = 2,
         confidence: float = 0.35,
         capacity: int = 12,
+        mode: str = "full",  # "full" = risk engine; "count" = person count only (platform/entrance)
     ) -> None:
         self.video_path = video_path
         self.stride = max(1, stride)
         self.confidence = confidence
         self.capacity = capacity
+        self.mode = mode if mode in ("full", "count") else "full"
 
     def open_capture(self) -> tuple[cv2.VideoCapture, dict]:
         cap = cv2.VideoCapture(str(self.video_path))
@@ -170,25 +172,36 @@ class VideoAnalyzer:
     async def stream(self) -> AsyncIterator[dict]:
         model = await _get_model()
         cap, meta = self.open_capture()
-        engine = RiskEngine(
-            fps=meta["fps"] / self.stride,
-            frame_width=meta["width"],
-            frame_height=meta["height"],
-            capacity=self.capacity,
-        )
+        fps = meta["fps"] / self.stride
+        engine: Optional[RiskEngine] = None
+        if self.mode == "full":
+            engine = RiskEngine(
+                fps=fps,
+                frame_width=meta["width"],
+                frame_height=meta["height"],
+                capacity=self.capacity,
+            )
+            yield {
+                "type": "meta",
+                **meta,
+                "stride": self.stride,
+                "lanes": engine.lanes,
+                "lane_separators": [
+                    [[round(tx, 4), round(ty, 4)], [round(bx, 4), round(by, 4)]]
+                    for (tx, ty), (bx, by) in engine.lane_separators
+                ],
+            }
+        else:
+            yield {
+                "type": "meta",
+                **meta,
+                "stride": self.stride,
+                "lanes": 0,
+                "lane_separators": [],
+            }
+
         person_tracker = IoUTracker()
         object_tracker = ObjectTracker()
-
-        yield {
-            "type": "meta",
-            **meta,
-            "stride": self.stride,
-            "lanes": engine.lanes,
-            "lane_separators": [
-                [[round(tx, 4), round(ty, 4)], [round(bx, 4), round(by, 4)]]
-                for (tx, ty), (bx, by) in engine.lane_separators
-            ],
-        }
 
         try:
             frame_idx = 0
@@ -203,10 +216,43 @@ class VideoAnalyzer:
 
                 detections, obj_dets = await asyncio.to_thread(self._detect, model, frame)
                 tracks = person_tracker.update(detections)
-                obj_tracks = object_tracker.update(obj_dets)
-                fr = engine.evaluate(processed, tracks, obj_tracks)
-                processed += 1
-                yield {"type": "frame", **frame_risk_to_dict(fr)}
+
+                if engine is not None:
+                    obj_tracks = object_tracker.update(obj_dets)
+                    fr = engine.evaluate(processed, tracks, obj_tracks)
+                    processed += 1
+                    yield {"type": "frame", **frame_risk_to_dict(fr)}
+                else:
+                    # count-only mode: no risk evaluation, no alerts, no objects
+                    person_count = len(tracks)
+                    density = min(1.0, person_count / max(1, self.capacity))
+                    yield {
+                        "type": "frame",
+                        "frame_idx": processed,
+                        "timestamp": round(processed / max(fps, 1.0), 3),
+                        "person_count": person_count,
+                        "density": round(density, 3),
+                        "lane_directions": [],
+                        "lanes": 0,
+                        "frame_width": meta["width"],
+                        "frame_height": meta["height"],
+                        "risk_score": 0.0,
+                        "dominant_signal": None,
+                        "alerts": [],
+                        "persons": [
+                            {
+                                "track_id": tr.track_id,
+                                "bbox": [round(c, 1) for c in tr.bbox],
+                                "head_bbox": None,
+                                "lane": 0,
+                                "risk": 0.0,
+                                "flags": [],
+                            }
+                            for tr in tracks
+                        ],
+                        "objects": [],
+                    }
+                    processed += 1
 
                 await asyncio.sleep(0)
         finally:
@@ -220,8 +266,13 @@ class VideoAnalyzer:
             for row in person_result.boxes.xyxy.cpu().numpy():
                 bbox = tuple(float(v) for v in row)
                 head = _head_bbox_from_person(bbox)
-                facing = _classify_facing(frame, head)
+                # Skip face-orientation classification in count mode (saves CPU; not used downstream)
+                facing = _classify_facing(frame, head) if self.mode == "full" else None
                 detections.append(Detection(bbox=bbox, head_bbox=head, facing_camera=facing))
+
+        # Object detection only matters for risk engine (unattended bag); skip in count mode
+        if self.mode != "full":
+            return detections, []
 
         obj_result = model.predict(frame, classes=list(_STUFF_CLASSES.keys()), conf=0.4, verbose=False)[0]
         objects: list[tuple[tuple[float, float, float, float], str]] = []

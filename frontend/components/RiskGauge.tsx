@@ -13,7 +13,7 @@ export function riskColor(score: number): string {
   return "#10b981";
 }
 
-export function RiskGauge({ score, label = "Risk" }: Props) {
+export function RiskGauge({ score, label = "Risk skoru" }: Props) {
   const pct = Math.max(0, Math.min(100, score));
   const color = riskColor(pct);
   const radius = 70;

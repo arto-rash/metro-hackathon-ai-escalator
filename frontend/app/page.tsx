@@ -18,19 +18,19 @@ export default function Home() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
             MetroEscalator{" "}
-            <span className="text-zinc-500">/ Risk Analyzer</span>
+            <span className="text-zinc-500">/ Risk Analizatoru</span>
           </h1>
           <p className="text-sm text-zinc-500">
-            Real-time safety detection · Baku Metro
+            Real vaxtda təhlükəsizlik aşkarlanması · Bakı Metrosu
           </p>
         </div>
 
         <nav className="flex gap-1 rounded-xl bg-zinc-900 p-1 ring-1 ring-zinc-800">
           <TabButton active={tab === "analysis"} onClick={() => setTab("analysis")}>
-            Escalator Analysis
+            Eskalator Analizi
           </TabButton>
           <TabButton active={tab === "stations"} onClick={() => setTab("stations")}>
-            Station Overview
+            Stansiya İcmalı
           </TabButton>
         </nav>
       </header>
@@ -46,10 +46,10 @@ export default function Home() {
             ) : (
               <div className="flex h-full min-h-[60vh] flex-col items-center justify-center gap-3 rounded-xl bg-zinc-900/40 ring-1 ring-zinc-800">
                 <p className="text-sm text-zinc-500">
-                  Select a video on the left to begin analysis.
+                  Analizi başlatmaq üçün soldan video seçin.
                 </p>
                 <p className="text-xs text-zinc-600">
-                  Supports escalator, platform, and entrance camera feeds.
+                  Eskalator, platforma və giriş kamera axınlarını dəstəkləyir.
                 </p>
               </div>
             )}

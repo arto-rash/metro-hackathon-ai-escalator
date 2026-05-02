@@ -145,7 +145,9 @@ async def ws_analyze(
         await ws.close()
         return
 
-    analyzer = VideoAnalyzer(path, stride=stride, capacity=capacity)
+    category = _get_category(video_id)
+    mode = "count" if category in ("platform", "entrance") else "full"
+    analyzer = VideoAnalyzer(path, stride=stride, capacity=capacity, mode=mode)
     try:
         async for event in analyzer.stream():
             await ws.send_text(json.dumps(event))

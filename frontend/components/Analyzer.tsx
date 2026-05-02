@@ -122,7 +122,7 @@ export function Analyzer({ video }: Props) {
     };
 
     ws.onerror = () => {
-      setErrorMsg("WebSocket connection failed");
+      setErrorMsg("WebSocket bağlantısı uğursuz oldu");
       setConn("error");
     };
     ws.onclose = () => {
@@ -194,11 +194,11 @@ export function Analyzer({ video }: Props) {
   }, [currentFrame, frames]);
 
   const status = useMemo(() => {
-    if (conn === "connecting") return { label: "Connecting…", color: "#a1a1aa" };
-    if (conn === "streaming") return { label: `Analyzing · ${frames.length} frames`, color: "#60a5fa" };
-    if (conn === "done") return { label: `Done · ${frames.length} frames`, color: "#10b981" };
-    if (conn === "error") return { label: "Error", color: "#ef4444" };
-    return { label: "Idle", color: "#71717a" };
+    if (conn === "connecting") return { label: "Qoşulur…", color: "#a1a1aa" };
+    if (conn === "streaming") return { label: `Analiz olunur · ${frames.length} kadr`, color: "#60a5fa" };
+    if (conn === "done") return { label: `Tamamlandı · ${frames.length} kadr`, color: "#10b981" };
+    if (conn === "error") return { label: "Xəta", color: "#ef4444" };
+    return { label: "Hazır", color: "#71717a" };
   }, [conn, frames.length]);
 
   const handleExport = () => {
@@ -316,7 +316,7 @@ export function Analyzer({ video }: Props) {
             videoHeight={meta?.height ?? 0}
             displayWidth={size.w}
             displayHeight={size.h}
-            laneSeparators={meta?.lane_separators ?? null}
+            laneSeparators={isPredictive ? null : (meta?.lane_separators ?? null)}
             onPersonClick={handlePersonClick}
           />
           <StopBanner active={stopActive} signal={stopSignal} onDismiss={handleStopDismiss} />
@@ -325,9 +325,9 @@ export function Analyzer({ video }: Props) {
           {isPredictive && (
             <div className="absolute left-3 top-3 rounded-lg bg-zinc-900/90 px-3 py-1.5 text-xs ring-1 ring-zinc-700">
               <span className="text-zinc-400">
-                {video.category === "platform" ? "Platform Camera" : "Entrance Camera"}
+                {video.category === "platform" ? "Platforma Kamerası" : "Giriş Kamerası"}
               </span>
-              <span className="ml-2 text-zinc-500">· predicts escalator load in ~{predDelay}s</span>
+              <span className="ml-2 text-zinc-500">· eskalator yükünü ~{predDelay}s əvvəl proqnozlaşdırır</span>
             </div>
           )}
         </div>
@@ -349,7 +349,7 @@ export function Analyzer({ video }: Props) {
               disabled={frames.length === 0}
               className="rounded bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-200 hover:bg-zinc-700 disabled:opacity-40"
             >
-              Extract data
+              Hesabat çıxar
             </button>
           </div>
         </div>
@@ -413,13 +413,13 @@ function FeedbackPopup({ person, x, y, onSubmit, onClose }: FeedbackPopupProps) 
       {/* Header */}
       <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-zinc-200">Person #{person.track_id}</span>
+          <span className="text-sm font-semibold text-zinc-200">Sərnişin #{person.track_id}</span>
           <span
             className={`rounded px-1.5 py-0.5 text-xs font-medium ${
               isFlagged ? "bg-rose-900/60 text-rose-300" : "bg-emerald-900/50 text-emerald-300"
             }`}
           >
-            {isFlagged ? "Flagged" : "Safe"}
+            {isFlagged ? "İşarələnib" : "Təhlükəsiz"}
           </span>
         </div>
         <button
@@ -433,7 +433,7 @@ function FeedbackPopup({ person, x, y, onSubmit, onClose }: FeedbackPopupProps) 
       {/* Currently detected flags — allow marking wrong */}
       {isFlagged && (
         <div className="border-b border-zinc-800 px-4 py-3">
-          <p className="mb-2 text-xs text-zinc-500">AI detected:</p>
+          <p className="mb-2 text-xs text-zinc-500">AI aşkarladı:</p>
           <div className="space-y-1">
             {person.flags.map((f) => (
               <div key={f} className="flex items-center justify-between gap-2">
@@ -442,7 +442,7 @@ function FeedbackPopup({ person, x, y, onSubmit, onClose }: FeedbackPopupProps) 
                   onClick={() => onSubmit(f as Signal, "incorrect")}
                   className="shrink-0 rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-500 hover:bg-rose-900/50 hover:text-rose-300"
                 >
-                  ✗ wrong
+                  ✗ səhv
                 </button>
               </div>
             ))}
@@ -453,7 +453,7 @@ function FeedbackPopup({ person, x, y, onSubmit, onClose }: FeedbackPopupProps) 
       {/* Report missed violation */}
       <div className="px-4 py-3">
         <p className="mb-2 text-xs text-zinc-500">
-          {isFlagged ? "Also report missed violation:" : "Which rule is being broken?"}
+          {isFlagged ? "Həmçinin qaçırılan pozuntunu bildir:" : "Hansı qayda pozulur?"}
         </p>
         <div className="space-y-1">
           {(Object.entries(SIGNAL_INFO) as [string, { label: string; description: string }][])
@@ -473,7 +473,7 @@ function FeedbackPopup({ person, x, y, onSubmit, onClose }: FeedbackPopupProps) 
                   }`}
                 >
                   <span className="text-left">{info.label}</span>
-                  {already && <span className="shrink-0 text-zinc-700">detected ✓</span>}
+                  {already && <span className="shrink-0 text-zinc-700">aşkarlandı ✓</span>}
                 </button>
               );
             })}
@@ -481,7 +481,7 @@ function FeedbackPopup({ person, x, y, onSubmit, onClose }: FeedbackPopupProps) 
       </div>
 
       <div className="border-t border-zinc-800 px-4 py-2 text-xs text-zinc-600">
-        Feedback trains the AI threshold in real time
+        Geri bildiriş AI həssaslığını real vaxtda öyrədir
       </div>
     </div>
   );
@@ -504,29 +504,29 @@ function PredictivePanel({ frame, delay, category }: PredictivePanelProps) {
     <div className="rounded-xl bg-zinc-900/60 p-4 ring-1 ring-zinc-800 space-y-4">
       <div>
         <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-          {category === "platform" ? "Platform" : "Entrance"} · Predictive Load
+          {category === "platform" ? "Platforma" : "Giriş"} · Proqnoz Yükü
         </p>
         <p className="mt-0.5 text-xs text-zinc-600">
-          People detected here will reach the escalator in ~{delay}s
+          Burada aşkarlanan insanlar ~{delay}s sonra eskalatora çatacaq
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-lg bg-zinc-800 p-3">
-          <p className="text-xs text-zinc-500">Current Count</p>
+          <p className="text-xs text-zinc-500">Cari Sayı</p>
           <p className="mt-1 text-2xl font-bold text-zinc-100">{count}</p>
-          <p className="text-xs text-zinc-500">people visible</p>
+          <p className="text-xs text-zinc-500">görünən insan</p>
         </div>
         <div className="rounded-lg bg-zinc-800 p-3">
-          <p className="text-xs text-zinc-500">Predicted Escalator Load</p>
+          <p className="text-xs text-zinc-500">Proqnoz Eskalator Yükü</p>
           <p className="mt-1 text-2xl font-bold text-blue-300">+{predicted}</p>
-          <p className="text-xs text-zinc-500">in ~{delay}s</p>
+          <p className="text-xs text-zinc-500">~{delay}s sonra</p>
         </div>
       </div>
 
       <div>
         <div className="mb-1 flex justify-between text-xs text-zinc-500">
-          <span>{category === "platform" ? "Platform" : "Area"} density</span>
+          <span>{category === "platform" ? "Platforma" : "Sahə"} sıxlığı</span>
           <span>{densityPct}%</span>
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
@@ -542,7 +542,7 @@ function PredictivePanel({ frame, delay, category }: PredictivePanelProps) {
 
       {predicted > 8 && (
         <div className="rounded-lg border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
-          ⚠ High predicted influx — consider preparing secondary escalator now
+          ⚠ Yüksək proqnoz axını — indi ikinci eskalatoru hazırlayın
         </div>
       )}
     </div>
