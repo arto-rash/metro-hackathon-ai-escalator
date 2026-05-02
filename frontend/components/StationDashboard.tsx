@@ -24,13 +24,18 @@ interface SpecialEvent {
 
 interface StationModel {
   version: number;
+  model?: string;                  // e.g. "prophet" (v2)
   bins_per_day: number;
   trained_from: string;
   trained_to: string;
+  forecast_from?: string;          // v2: first ds in `forecast`
+  forecast_to?: string;
+  forecast_horizon_days?: number;
   stations: Record<string, {
     name: string;
     p95_15min: number;
-    by_dow_bin: number[][];   // [7][96]
+    by_dow_bin: number[][];                  // [7][96] — historical fallback
+    forecast?: Record<string, number[]>;     // v2: YYYY-MM-DD → [96] Prophet yhat
   }>;
 }
 
@@ -107,16 +112,28 @@ function pad(n: number) { return String(n).padStart(2, "0"); }
 function fmtDate(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 function fmtTime(d: Date) { return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 
-/** Look up the trained 15-min average for (station, dow, hh:mm) and convert to 0..99 density via p95. */
+/** Look up Prophet's forecast for (station, date, hh:mm); fall back to historical
+ * dow×bin average for dates outside the forecast horizon. Result is normalised
+ * to a 0..99 density via the per-station p95. */
+function trainedPassengers(stationId: string, dt: Date, model: StationModel | null): number {
+  if (!model) return 0;
+  const s = model.stations[stationId];
+  if (!s) return 0;
+  const bin = Math.floor((dt.getHours() * 60 + dt.getMinutes()) / 15); // 0..95
+  const ymd = fmtDate(dt);
+  const fcRow = s.forecast?.[ymd];
+  if (fcRow && bin < fcRow.length) return fcRow[bin] ?? 0;
+  const dow = dt.getDay();                                             // Sunday=0..Saturday=6
+  return s.by_dow_bin[dow]?.[bin] ?? 0;
+}
+
 function trainedDensity(stationId: string, dt: Date, model: StationModel | null): number {
   if (!model) return 25;
   const s = model.stations[stationId];
   if (!s) return 25;
-  const dow = dt.getDay();                                          // Sunday=0..Saturday=6
-  const bin = Math.floor((dt.getHours() * 60 + dt.getMinutes()) / 15); // 0..95
-  const avg = s.by_dow_bin[dow]?.[bin] ?? 0;
+  const avg = trainedPassengers(stationId, dt, model);
   const ref = s.p95_15min || 1;
-  // p95 → 95 density; values above p95 push toward 99
+  // p95 → 95 density; values above p95 push toward 99.
   return Math.max(2, Math.min(99, Math.round((avg / ref) * 95)));
 }
 
@@ -150,7 +167,10 @@ function useStationModel(): StationModel | null {
   const [model, setModel] = useState<StationModel | null>(null);
   useEffect(() => {
     let cancelled = false;
-    fetch("/station_model.json", { cache: "force-cache" })
+    // `no-cache` revalidates with the server (304 if unchanged) — guarantees
+    // the dashboard picks up a freshly retrained station_model.json without
+    // serving a stale `force-cache` copy.
+    fetch("/station_model.json", { cache: "no-cache" })
       .then((r) => r.json())
       .then((j) => { if (!cancelled) setModel(j); })
       .catch(() => {});
@@ -252,10 +272,11 @@ export function StationDashboard() {
             Bakı Metrosu ·{" "}
             {mode === "live"
               ? "canlı sıxlıq · real ridership profili (15 dəq) · hər 2.5 s yenilənir"
-              : "proqnoz modeli · 15 dəqiqəlik tarixi məlumat üzərində öyrədilib"}
+              : `proqnoz modeli${model?.model === "prophet" ? " · Prophet (trend + həftəlik/günlük/illik mövsümlülük + bayramlar)" : ""}`}
             {model && (
               <span className="ml-1 text-zinc-600">
-                · model: {model.trained_from} → {model.trained_to}
+                · öyrətmə: {model.trained_from} → {model.trained_to}
+                {model.forecast_to && ` · proqnoz: → ${model.forecast_to}`}
               </span>
             )}
           </p>
@@ -443,7 +464,7 @@ function StationDetail({ station, density, mode, model, forecastDate, forecastTi
     : density > 55 ? "Monitor — ikinci eskalatoru nəzərdən keçirin"
     : "Normal iş rejimi";
 
-  // Avg passenger count for this 15-min slot
+  // Passenger count for this 15-min slot (Prophet yhat if in horizon, else dow average).
   const avgPax = useMemo(() => {
     if (!model) return null;
     const s = model.stations[station.id];
@@ -451,9 +472,7 @@ function StationDetail({ station, density, mode, model, forecastDate, forecastTi
     const dt = mode === "forecast" && forecastDate && forecastTime
       ? new Date(`${forecastDate}T${forecastTime}:00`)
       : new Date();
-    const dow = dt.getDay();
-    const bin = Math.floor((dt.getHours() * 60 + dt.getMinutes()) / 15);
-    return Math.round(s.by_dow_bin[dow]?.[bin] ?? 0);
+    return Math.round(trainedPassengers(station.id, dt, model));
   }, [model, station.id, mode, forecastDate, forecastTime]);
 
   return (

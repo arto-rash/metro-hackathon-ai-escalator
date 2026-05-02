@@ -1,13 +1,13 @@
 """Video analyzer: head detection + head orientation, no body pose.
 
-- yolov8n.pt detects persons (class 0). Head bbox = top 30% of person bbox,
+- yolo26n.pt detects persons (class 0). Head bbox = top 30% of person bbox,
   narrowed to 65% of the person width — same heuristic as the snippet you
   shared earlier.
 - OpenCV haar cascades (frontal + profile, bundled with opencv-python) run
   on each head crop and produce a `facing_camera` flag (True / False / None).
   The risk engine uses lane-majority comparison on this flag rather than any
   body-keypoint signals.
-- yolov8n.pt also detects bag classes (24/26/28) for "stuff on escalator".
+- yolo26n.pt also detects bag classes (24/26/28) for "stuff on escalator".
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ async def _get_model():
     async with _MODEL_LOCK:
         if _MODEL is None:
             from ultralytics import YOLO
-            _MODEL = YOLO("yolov8n.pt")
+            _MODEL = YOLO("yolo26n.pt")
     return _MODEL
 
 
@@ -255,9 +255,11 @@ class VideoAnalyzer:
                     processed += 1
 
                 await asyncio.sleep(0)
+            # Reached only when the video ends naturally; on disconnect/cancel
+            # GeneratorExit propagates out of the loop and skips this yield.
+            yield {"type": "done", "processed_frames": processed}
         finally:
             cap.release()
-            yield {"type": "done", "processed_frames": processed}
 
     def _detect(self, model, frame: np.ndarray) -> tuple[list[Detection], list[tuple[tuple[float, float, float, float], str]]]:
         person_result = model.predict(frame, classes=[0], conf=self.confidence, verbose=False)[0]

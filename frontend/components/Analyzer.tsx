@@ -122,8 +122,8 @@ export function Analyzer({ video }: Props) {
     };
 
     ws.onerror = () => {
-      setErrorMsg("WebSocket bağlantısı uğursuz oldu");
-      setConn("error");
+      // Suppressed per user request — the WS lifecycle ends in `onclose`
+      // anyway, so we just let the close handler resolve the state.
     };
     ws.onclose = () => {
       setConn((c) => (c === "streaming" ? "done" : c));
@@ -317,7 +317,7 @@ export function Analyzer({ video }: Props) {
             displayWidth={size.w}
             displayHeight={size.h}
             laneSeparators={isPredictive ? null : (meta?.lane_separators ?? null)}
-            onPersonClick={handlePersonClick}
+            onPersonClick={isPredictive ? undefined : handlePersonClick}
           />
           <StopBanner active={stopActive} signal={stopSignal} onDismiss={handleStopDismiss} />
 

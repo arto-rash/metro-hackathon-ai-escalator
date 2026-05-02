@@ -49,7 +49,7 @@ cd backend
 ./run.sh             # creates .venv, installs deps, starts uvicorn on :8000
 ```
 
-First request downloads `yolov8n.pt` (~6 MB) into the working dir.
+First request downloads `yolo26n.pt` (~5 MB) into the working dir.
 
 Drop `.mp4` / `.mov` / `.avi` files into `backend/videos/` and they show up
 in the source picker. Or upload through the UI.
