@@ -49,7 +49,7 @@ export function AlertsFeed({ alerts, onJump }: Props) {
     <div className="flex h-full flex-col rounded-xl bg-zinc-900/60 ring-1 ring-zinc-800">
       <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2.5">
         <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-          Canlı Həyəcanlar
+          Canlı Xəbərdarlıqlar
         </span>
         {alerts.length > 0 && (
           <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">
@@ -60,7 +60,7 @@ export function AlertsFeed({ alerts, onJump }: Props) {
 
       <div className="flex-1 overflow-auto p-3">
         {alerts.length === 0 ? (
-          <div className="py-8 text-center text-sm text-zinc-600">Hələ həyəcan yoxdur</div>
+          <div className="py-8 text-center text-sm text-zinc-600">Hələ xəbərdarlıq yoxdur</div>
         ) : (
           <ul className="space-y-2">
             {alerts.slice(0, 60).map((a) => {
@@ -135,7 +135,7 @@ export function AlertsFeed({ alerts, onJump }: Props) {
 
       {alerts.length > 0 && (
         <div className="border-t border-zinc-800 px-4 py-2 text-xs text-zinc-600">
-          İstənilən həyəcana klikləyərək həmin vaxta keçin
+          İstənilən xəbərdarlığa klikləyərək həmin vaxta keçin
         </div>
       )}
     </div>

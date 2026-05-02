@@ -460,8 +460,8 @@ function StationDetail({ station, density, mode, model, forecastDate, forecastTi
   const lm = LINE_META[station.line];
   const wait = Math.round((density / 10) * 1.8);
   const rec =
-    density > 75 ? "⚠ İkinci eskalatoru dərhal işə salın"
-    : density > 55 ? "Monitor — ikinci eskalatoru nəzərdən keçirin"
+    density > 75 ? "⚠ Ehtiyat eskalatoru dərhal işə salın"
+    : density > 55 ? "Monitor — ehtiyat eskalatoru nəzərdən keçirin"
     : "Normal iş rejimi";
 
   // Passenger count for this 15-min slot (Prophet yhat if in horizon, else dow average).

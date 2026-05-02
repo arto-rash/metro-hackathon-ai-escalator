@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import type { FrameEvent, MetaEvent, Signal, StreamEvent, VideoItem } from "@/lib/types";
 import { analyzeWsUrl, videoFileUrl, submitFeedback } from "@/lib/api";
 import { SIGNAL_INFO } from "@/lib/signals";
@@ -156,8 +157,11 @@ export function Analyzer({ video }: Props) {
 
   useEffect(() => {
     if (!currentFrame || stopActive || Date.now() < stopCooldownUntil.current) return;
-    if (currentFrame.risk_score >= STOP_THRESHOLD) {
-      setStopSignal(currentFrame.dominant_signal);
+    // Stop banner is reserved for falls only — counterflow / running / facing /
+    // sitting raise the risk gauge but never trigger an automatic stop.
+    const fallPerson = currentFrame.persons.find((p) => p.flags.includes("fall"));
+    if (fallPerson) {
+      setStopSignal("fall" as Signal);
       setStopActive(true);
     }
   }, [currentFrame, stopActive]);
@@ -166,6 +170,15 @@ export function Analyzer({ video }: Props) {
     setStopActive(false);
     setStopSignal(null);
     stopCooldownUntil.current = Date.now() + STOP_COOLDOWN_MS;
+  }, []);
+
+  const simulateStop = useCallback(() => {
+    // Demo: reset cooldown and force the stop banner. The banner is reserved
+    // for falls, so we always pass "fall" regardless of current dominant signal.
+    // Playback is intentionally NOT paused so the demo stays live.
+    stopCooldownUntil.current = 0;
+    setStopSignal("fall" as Signal);
+    setStopActive(true);
   }, []);
 
   useEffect(() => {
@@ -204,6 +217,9 @@ export function Analyzer({ video }: Props) {
   const handleExport = () => {
     if (frames.length === 0) return;
 
+    const fmtTs = (t: number) =>
+      `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, "0")}`;
+
     const BUCKET_SEC = 60;
     const totalSec = frames[frames.length - 1].timestamp;
     const bucketCount = Math.max(1, Math.ceil(totalSec / BUCKET_SEC));
@@ -215,66 +231,88 @@ export function Analyzer({ video }: Props) {
     const avgRisk = allRisks.reduce((s, v) => s + v, 0) / allRisks.length;
     const peakRisk = Math.max(...allRisks);
     const peakFrame = frames.find((f) => f.risk_score === peakRisk);
+    const maxDensityPct = Math.round(Math.max(...frames.map((f) => f.density)) * 100);
+    const avgPeople = Math.round(
+      frames.reduce((s, f) => s + f.person_count, 0) / frames.length,
+    );
 
-    const timeline = Array.from({ length: bucketCount }, (_, i) => {
+    // ── Sheet 1: Xülasə (summary) ───────────────────────────────────────────
+    const summaryRows: (string | number)[][] = [
+      ["Hesabat tarixi",         new Date().toLocaleString("az-AZ")],
+      ["Video adı",              video.name],
+      ["Kateqoriya",             video.category ?? "escalator"],
+      ["Müddət",                 `${Math.floor(totalSec / 60)}d ${Math.round(totalSec % 60)}s`],
+      ["İşlənmiş kadr sayı",     frames.length],
+      ["Effektiv FPS",           meta ? +(meta.fps / meta.stride).toFixed(1) : "—"],
+      ["Yayım çözünürlüyü",      meta ? `${meta.width}×${meta.height}` : "—"],
+      ["Zolaq sayı",             meta?.lanes ?? "—"],
+      [],
+      ["Orta risk balı",         Math.round(avgRisk)],
+      ["Pik risk balı",          Math.round(peakRisk)],
+      ["Pik risk anı",           peakFrame ? fmtTs(peakFrame.timestamp) : "—"],
+      ["Maks. sıxlıq (%)",       maxDensityPct],
+      ["Ortalama insan sayı",    avgPeople],
+      ["Ümumi xəbərdarlıq",      alerts.length],
+    ];
+    const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+    summarySheet["!cols"] = [{ wch: 26 }, { wch: 32 }];
+
+    // ── Sheet 2: Xəbərdarlıq növləri (alert breakdown) ──────────────────────
+    const breakdownRows: (string | number)[][] = [["Növ", "Etiket", "Say"]];
+    for (const [sig, n] of Object.entries(alertCounts)) {
+      breakdownRows.push([sig, SIGNAL_INFO[sig as Signal]?.label ?? sig, n]);
+    }
+    const breakdownSheet = XLSX.utils.aoa_to_sheet(breakdownRows);
+    breakdownSheet["!cols"] = [{ wch: 16 }, { wch: 28 }, { wch: 8 }];
+
+    // ── Sheet 3: Vaxt cədvəli (per-minute timeline) ─────────────────────────
+    const timelineRows: (string | number)[][] = [
+      ["Dövr", "Orta risk", "Pik risk", "Orta insan", "Maks sıxlıq %", "Xəbərdarlıq sayı"],
+    ];
+    for (let i = 0; i < bucketCount; i++) {
       const tStart = i * BUCKET_SEC;
       const tEnd = tStart + BUCKET_SEC;
       const bucket = frames.filter((f) => f.timestamp >= tStart && f.timestamp < tEnd);
-      if (bucket.length === 0) return null;
+      if (bucket.length === 0) continue;
       const bucketAlerts = alerts.filter((a) => a.ts >= tStart && a.ts < tEnd);
       const bucketRisks = bucket.map((f) => f.risk_score);
-      const mins = Math.floor(tStart / 60);
-      const secs = Math.round(tStart % 60);
-      return {
-        period: `${mins}:${String(secs).padStart(2, "0")} – ${Math.floor(tEnd / 60)}:${String(Math.round(tEnd % 60)).padStart(2, "0")}`,
-        avg_risk: Math.round(bucketRisks.reduce((s, v) => s + v, 0) / bucketRisks.length),
-        peak_risk: Math.round(Math.max(...bucketRisks)),
-        avg_people: Math.round(bucket.reduce((s, f) => s + f.person_count, 0) / bucket.length),
-        max_density_pct: Math.round(Math.max(...bucket.map((f) => f.density)) * 100),
-        alerts: bucketAlerts.map((a) => ({
-          time: `${Math.floor(a.ts / 60)}:${String(Math.round(a.ts % 60)).padStart(2, "0")}`,
-          type: a.signal,
-          severity: a.severity,
-          message: a.message,
-        })),
-      };
-    }).filter(Boolean);
+      timelineRows.push([
+        `${fmtTs(tStart)} – ${fmtTs(tEnd)}`,
+        Math.round(bucketRisks.reduce((s, v) => s + v, 0) / bucketRisks.length),
+        Math.round(Math.max(...bucketRisks)),
+        Math.round(bucket.reduce((s, f) => s + f.person_count, 0) / bucket.length),
+        Math.round(Math.max(...bucket.map((f) => f.density)) * 100),
+        bucketAlerts.length,
+      ]);
+    }
+    const timelineSheet = XLSX.utils.aoa_to_sheet(timelineRows);
+    timelineSheet["!cols"] = [{ wch: 16 }, { wch: 11 }, { wch: 10 }, { wch: 11 }, { wch: 14 }, { wch: 18 }];
 
-    const payload = {
-      exported_at: new Date().toISOString(),
-      video: { name: video.name, category: video.category ?? "escalator" },
-      analysis: {
-        duration: `${Math.floor(totalSec / 60)}m ${Math.round(totalSec % 60)}s`,
-        frames_processed: frames.length,
-        fps_effective: meta ? +(meta.fps / meta.stride).toFixed(1) : null,
-        resolution: meta ? `${meta.width}×${meta.height}` : null,
-        lanes: meta?.lanes ?? null,
-      },
-      summary: {
-        avg_risk_score: Math.round(avgRisk),
-        peak_risk_score: Math.round(peakRisk),
-        peak_risk_at: peakFrame
-          ? `${Math.floor(peakFrame.timestamp / 60)}:${String(Math.round(peakFrame.timestamp % 60)).padStart(2, "0")}`
-          : null,
-        total_alerts: alerts.length,
-        alert_breakdown: alertCounts,
-        max_density_pct: Math.round(Math.max(...frames.map((f) => f.density)) * 100),
-        avg_people_on_escalator: Math.round(
-          frames.reduce((s, f) => s + f.person_count, 0) / frames.length,
-        ),
-      },
-      timeline,
-    };
+    // ── Sheet 4: Xəbərdarlıqlar (full alert log) ────────────────────────────
+    const alertRows: (string | number)[][] = [
+      ["Vaxt", "Növ", "Etiket", "Səviyyə", "Mesaj"],
+    ];
+    for (const a of [...alerts].sort((x, y) => x.ts - y.ts)) {
+      alertRows.push([
+        fmtTs(a.ts),
+        a.signal,
+        SIGNAL_INFO[a.signal as Signal]?.label ?? a.signal,
+        a.severity,
+        a.message,
+      ]);
+    }
+    const alertSheet = XLSX.utils.aoa_to_sheet(alertRows);
+    alertSheet["!cols"] = [{ wch: 8 }, { wch: 14 }, { wch: 26 }, { wch: 10 }, { wch: 60 }];
 
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `metro-report-${video.name.replace(/\.[^.]+$/, "")}-${Date.now()}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    // ── Build & download ───────────────────────────────────────────────────
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, summarySheet,   "Xülasə");
+    XLSX.utils.book_append_sheet(wb, breakdownSheet, "Növlər");
+    XLSX.utils.book_append_sheet(wb, timelineSheet,  "Vaxt cədvəli");
+    XLSX.utils.book_append_sheet(wb, alertSheet,     "Xəbərdarlıqlar");
+
+    const baseName = video.name.replace(/\.[^.]+$/, "");
+    XLSX.writeFile(wb, `metro-hesabat-${baseName}-${Date.now()}.xlsx`);
   };
 
   const isPredictive = video.category === "platform" || video.category === "entrance";
@@ -344,6 +382,15 @@ export function Analyzer({ video }: Props) {
                 ? `${meta.width}×${meta.height} · ${meta.fps.toFixed(1)} fps · stride ${meta.stride} · ${meta.lanes} lanes`
                 : "—"}
             </span>
+            {!isPredictive && (
+              <button
+                onClick={simulateStop}
+                title="Demo: təcili dayandırma simulyasiyası"
+                className="rounded bg-rose-900/60 px-3 py-1 text-xs font-medium text-rose-100 ring-1 ring-rose-800 hover:bg-rose-800"
+              >
+                ⚠ Demo Dayandır
+              </button>
+            )}
             <button
               onClick={handleExport}
               disabled={frames.length === 0}
@@ -542,7 +589,7 @@ function PredictivePanel({ frame, delay, category }: PredictivePanelProps) {
 
       {predicted > 8 && (
         <div className="rounded-lg border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
-          ⚠ Yüksək proqnoz axını — indi ikinci eskalatoru hazırlayın
+          ⚠ Yüksək proqnoz axını — indi ehtiyat eskalatoru hazırlayın
         </div>
       )}
     </div>

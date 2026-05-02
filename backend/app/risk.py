@@ -115,10 +115,6 @@ class RiskEngine:
         self._active: dict[tuple[int, str], int] = {}
         self._density_active = False
         self._gap_frames = max(int(self.fps * 1.5), 3)
-        # Streak counters: how many consecutive processed frames each (track_id, signal) has fired.
-        # Alerts only fire once the streak reaches _alert_persist (3 seconds).
-        self._streak: dict[tuple[int, str], int] = {}
-        self._alert_persist = max(int(self.fps * 3.0), 6)
         facing_window = max(int(self.fps * 2.5), 12)
         self._track_facing: dict[int, deque[bool]] = {}
         self._lane_facing: list[deque[bool]] = [deque(maxlen=facing_window * self.lanes) for _ in range(self.lanes)]
@@ -233,19 +229,6 @@ class RiskEngine:
         confidence = min(1.0, (diff - threshold) / max(1.0 - threshold, 0.2) + 0.5)
         return True, confidence
 
-    def _streak_ready(self, track_id: int, signal: str) -> bool:
-        """Increment streak counter for (track_id, signal) and return True once ≥ _alert_persist."""
-        key = (track_id, signal)
-        self._streak[key] = self._streak.get(key, 0) + 1
-        return self._streak[key] >= self._alert_persist
-
-    def _clear_stale_streaks(self, track_id: int, active_signals: list[str]) -> None:
-        active = set(active_signals)
-        for sig in list(BASE_RISK):
-            k = (track_id, sig)
-            if sig not in active and k in self._streak:
-                del self._streak[k]
-
     def evaluate(
         self,
         frame_idx: int,
@@ -260,9 +243,6 @@ class RiskEngine:
         live_ids = {tr.track_id for tr in tracks}
         for tid in [tid for tid in self._track_facing if tid not in live_ids]:
             self._track_facing.pop(tid, None)
-        # Clean up streaks for tracks that have left the scene
-        for k in [k for k in self._streak if k[0] not in live_ids]:
-            del self._streak[k]
 
         for tr in tracks:
             if tr.facing_camera is None:
@@ -307,7 +287,7 @@ class RiskEngine:
             if is_fall:
                 flags.append("fall")
                 risk = max(risk, BASE_RISK["fall"] * (0.85 + 0.15 * fall_conf))
-                if self._streak_ready(tr.track_id, "fall") and self._onset(tr.track_id, "fall", frame_idx):
+                if self._onset(tr.track_id, "fall", frame_idx):
                     alerts.append(Alert(
                         id=f"{frame_idx}-{tr.track_id}-fall",
                         signal="fall", track_id=tr.track_id, severity="danger",
@@ -318,7 +298,7 @@ class RiskEngine:
             if is_sit:
                 flags.append("sitting")
                 risk = max(risk, BASE_RISK["sitting"] * (0.7 + 0.3 * sit_conf))
-                if self._streak_ready(tr.track_id, "sitting") and self._onset(tr.track_id, "sitting", frame_idx):
+                if self._onset(tr.track_id, "sitting", frame_idx):
                     alerts.append(Alert(
                         id=f"{frame_idx}-{tr.track_id}-sitting",
                         signal="sitting", track_id=tr.track_id, severity="warn",
@@ -336,7 +316,7 @@ class RiskEngine:
                 if abs(vy) > 0.6 + offsets["counterflow"] * 2.0:
                     flags.append("counterflow")
                     risk = max(risk, BASE_RISK["counterflow"])
-                    if self._streak_ready(tr.track_id, "counterflow") and self._onset(tr.track_id, "counterflow", frame_idx):
+                    if self._onset(tr.track_id, "counterflow", frame_idx):
                         alerts.append(Alert(
                             id=f"{frame_idx}-{tr.track_id}-counterflow",
                             signal="counterflow", track_id=tr.track_id, severity="warn",
@@ -347,7 +327,7 @@ class RiskEngine:
             if is_face:
                 flags.append("facing_back")
                 risk = max(risk, BASE_RISK["facing_back"] * (0.7 + 0.3 * face_conf))
-                if self._streak_ready(tr.track_id, "facing_back") and self._onset(tr.track_id, "facing_back", frame_idx):
+                if self._onset(tr.track_id, "facing_back", frame_idx):
                     alerts.append(Alert(
                         id=f"{frame_idx}-{tr.track_id}-facing_back",
                         signal="facing_back", track_id=tr.track_id, severity="warn",
@@ -359,15 +339,12 @@ class RiskEngine:
             if speed_norm > run_threshold and tr.age > self.fps * 1.0:
                 flags.append("running")
                 risk = max(risk, BASE_RISK["running"] * min(1.0, 0.6 + (speed_norm - run_threshold) / max(run_threshold, 0.5)))
-                if self._streak_ready(tr.track_id, "running") and self._onset(tr.track_id, "running", frame_idx):
+                if self._onset(tr.track_id, "running", frame_idx):
                     alerts.append(Alert(
                         id=f"{frame_idx}-{tr.track_id}-running",
                         signal="running", track_id=tr.track_id, severity="warn",
                         message=f"Running on escalator — track {tr.track_id}",
                     ))
-
-            # Reset streaks for signals that did NOT fire this frame
-            self._clear_stale_streaks(tr.track_id, flags)
 
             if risk > max_risk:
                 max_risk = risk

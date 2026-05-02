@@ -63,7 +63,7 @@ export function StopBanner({ active, signal, onDismiss }: Props) {
         DAYAN
       </div>
       <div className="flex-1 text-sm text-red-50">
-        Kritik risk{signal ? ` · ${signal}` : ""}. 8 saniyə ərzində ləğv edilməsə avtomatik dayandırılacaq.
+        Yıxılma aşkarlandı. 8 saniyə ərzində ləğv edilməsə eskalator avtomatik dayandırılacaq.
       </div>
       <button
         onClick={handleIgnore}
