@@ -17,7 +17,7 @@ export default function Home() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
-            MetroEscalator{" "}
+            EscaFlow{" "}
             <span className="text-zinc-500">/ Risk Analizatoru</span>
           </h1>
           <p className="text-sm text-zinc-500">

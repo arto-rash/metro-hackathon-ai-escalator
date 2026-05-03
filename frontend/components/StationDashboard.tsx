@@ -137,28 +137,102 @@ function trainedDensity(stationId: string, dt: Date, model: StationModel | null)
   return Math.max(2, Math.min(99, Math.round((avg / ref) * 95)));
 }
 
-/** Forecast = trained baseline × special-event multipliers. */
+// Stable 0..1 hash so each (event, station) gets its own spike fingerprint
+// instead of every flagged station landing on the same number.
+function hashSeed(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) / 4294967295;
+}
+
+function eventMatches(e: SpecialEvent, stationId: string, dt: Date): boolean {
+  if (e.date !== fmtDate(dt)) return false;
+  if (!e.stationIds.includes(stationId)) return false;
+  if (e.allDay) return true;
+  const hm = fmtTime(dt);
+  if (e.startTime && hm < e.startTime) return false;
+  if (e.endTime && hm > e.endTime) return false;
+  return true;
+}
+
+/** Model-driven event boost. High events push density into the 80–99% band by
+ * anchoring above the station's *own* historical peak (from by_dow_bin) and
+ * modulating by time-of-day, transfer status, and a per-event seed — instead
+ * of a flat ×2 multiplier that under-shoots quiet stations. */
+function applyEventBoost(
+  baseDensity: number,
+  stationId: string,
+  dt: Date,
+  model: StationModel | null,
+  event: SpecialEvent,
+): number {
+  if (event.type === "low") {
+    const seed = hashSeed(event.id + stationId);
+    const cut = 0.20 + seed * 0.16; // 0.20..0.36, stable per (event, station)
+    return Math.max(6, Math.min(40, Math.round(baseDensity * cut)));
+  }
+
+  // Anchor: the station's own peak density on this weekday (relative to its p95).
+  let peakDensity = 70;
+  const station = model?.stations[stationId];
+  if (station) {
+    const dowRow = station.by_dow_bin[dt.getDay()] ?? [];
+    const dailyPeak = dowRow.length ? Math.max(...dowRow) : station.p95_15min;
+    const ref = station.p95_15min || 1;
+    peakDensity = Math.max(55, Math.min(99, (dailyPeak / ref) * 95));
+  }
+
+  // Rush windows surge harder; deep night softens but still clears the 80 floor.
+  const hour = dt.getHours();
+  let timeFactor = 0.82;
+  if ((hour >= 7 && hour <= 10) || (hour >= 17 && hour <= 20)) timeFactor = 1.0;
+  else if ((hour >= 11 && hour <= 16) || (hour >= 21 && hour <= 22)) timeFactor = 0.92;
+  else if (hour >= 23 || hour <= 5) timeFactor = 0.72;
+
+  const transferBonus = STATION_BY_ID[stationId]?.transfer ? 1.04 : 1.0;
+  const variation = 0.92 + hashSeed(event.id + stationId) * 0.08; // 0.92..1.00
+
+  // Climb the headroom above the station's natural peak toward saturation.
+  const headroom = 99 - peakDensity;
+  const target = peakDensity + headroom * timeFactor * transferBonus * variation;
+
+  // Floor at 80 — flagged "high traffic" days should always read at least Yüksək.
+  const blended = Math.max(target, baseDensity);
+  return Math.max(80, Math.min(99, Math.round(blended)));
+}
+
 function forecastDensity(
   stationId: string,
   dt: Date,
   model: StationModel | null,
   events: SpecialEvent[],
 ): number {
-  let base = trainedDensity(stationId, dt, model);
-
-  const ymd = fmtDate(dt);
-  const hm = fmtTime(dt);
+  let d = trainedDensity(stationId, dt, model);
   for (const e of events) {
-    if (e.date !== ymd) continue;
-    if (!e.stationIds.includes(stationId)) continue;
-    if (!e.allDay) {
-      if (e.startTime && hm < e.startTime) continue;
-      if (e.endTime && hm > e.endTime) continue;
-    }
-    base *= e.type === "high" ? 2.0 : 0.32;
+    if (!eventMatches(e, stationId, dt)) continue;
+    d = applyEventBoost(d, stationId, dt, model, e);
   }
+  return Math.max(2, Math.min(99, Math.round(d)));
+}
 
-  return Math.max(2, Math.min(99, Math.round(base)));
+/** Passenger count consistent with `forecastDensity` — scales the trained
+ * 15-min figure by the same density ratio the boost produced, so the detail
+ * card doesn't show a baseline number next to a saturated density bar. */
+function forecastPassengers(
+  stationId: string,
+  dt: Date,
+  model: StationModel | null,
+  events: SpecialEvent[],
+): number {
+  const basePax = trainedPassengers(stationId, dt, model);
+  if (!model) return Math.round(basePax);
+  const baseD = trainedDensity(stationId, dt, model);
+  const boostedD = forecastDensity(stationId, dt, model, events);
+  const ratio = baseD > 0 ? boostedD / baseD : 1;
+  return Math.round(basePax * ratio);
 }
 
 // ── Hooks ──────────────────────────────────────────────────────────────────
@@ -409,6 +483,7 @@ export function StationDashboard() {
           density={densities[selected.id] ?? 50}
           mode={mode}
           model={model}
+          events={events}
           forecastDate={mode === "forecast" ? forecastDate : null}
           forecastTime={mode === "forecast" ? forecastTime : null}
           onClose={() => setSelected(null)}
@@ -451,12 +526,13 @@ interface StationDetailProps {
   density: number;
   mode: Mode;
   model: StationModel | null;
+  events: SpecialEvent[];
   forecastDate: string | null;
   forecastTime: string | null;
   onClose: () => void;
 }
 
-function StationDetail({ station, density, mode, model, forecastDate, forecastTime, onClose }: StationDetailProps) {
+function StationDetail({ station, density, mode, model, events, forecastDate, forecastTime, onClose }: StationDetailProps) {
   const lm = LINE_META[station.line];
   const wait = Math.round((density / 10) * 1.8);
   const rec =
@@ -464,7 +540,8 @@ function StationDetail({ station, density, mode, model, forecastDate, forecastTi
     : density > 55 ? "Monitor — ehtiyat eskalatoru nəzərdən keçirin"
     : "Normal iş rejimi";
 
-  // Passenger count for this 15-min slot (Prophet yhat if in horizon, else dow average).
+  // Passenger count for this 15-min slot. In forecast mode we apply the same
+  // event boost as the density tile so the two readouts agree.
   const avgPax = useMemo(() => {
     if (!model) return null;
     const s = model.stations[station.id];
@@ -472,8 +549,10 @@ function StationDetail({ station, density, mode, model, forecastDate, forecastTi
     const dt = mode === "forecast" && forecastDate && forecastTime
       ? new Date(`${forecastDate}T${forecastTime}:00`)
       : new Date();
-    return Math.round(trainedPassengers(station.id, dt, model));
-  }, [model, station.id, mode, forecastDate, forecastTime]);
+    return mode === "forecast"
+      ? forecastPassengers(station.id, dt, model, events)
+      : Math.round(trainedPassengers(station.id, dt, model));
+  }, [model, station.id, mode, events, forecastDate, forecastTime]);
 
   return (
     <div className="rounded-xl bg-zinc-900 p-5 ring-1 ring-zinc-700">

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MetroEscalator — Risk Analyzer",
+  title: "EscaFlow — KhatAI",
   description: "Real-time fall and counterflow risk monitoring for metro escalators",
 };
 
